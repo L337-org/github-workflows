@@ -53,11 +53,42 @@ on:
         default: sonnet
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
-        description: 'Subscription token from `claude setup-token`.  Usage draws on the allowance of whoever generated it.'
-        required: true
+        description: 'Subscription token from `claude setup-token`.  Usage draws on the allowance of whoever generated it.  Not required, so that a run without it - a Dependabot or fork pull request, which GitHub gives no secrets - is skipped with a notice rather than failing.'
+        required: false
 
 jobs:
+  gate:
+    # Decides whether this run can be reviewed at all, before a runner is spent on the review.
+    # GitHub gives no secrets to a run that Dependabot or a fork pull request started, and the
+    # review action rejects a bot actor, so either would otherwise end as a red job on every
+    # such pull request.  Those are skipped by design: bot pull requests are reviewed by hand.
+    # The skip is reported as a notice rather than passed over in silence, so a missing token
+    # in a repository that should have one is visible.
+    runs-on: [ubuntu-latest]
+    name: Can this be reviewed
+    timeout-minutes: 2
+    outputs:
+      run: ${{ steps.check.outputs.run }}
+    steps:
+      - name: Check for a token and a human actor
+        id: check
+        env:
+          HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          if [ "$HAS_TOKEN" != true ]; then
+            echo "::notice::Review skipped: no CLAUDE_CODE_OAUTH_TOKEN reached this run.  GitHub withholds secrets from Dependabot and fork pull requests; elsewhere, check the secret is set and passed by the caller."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          elif [[ "$ACTOR" == *'[bot]' ]]; then
+            echo "::notice::Review skipped: $ACTOR is a bot, and bot pull requests are reviewed by hand."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "run=true" >> "$GITHUB_OUTPUT"
+          fi
+
   review:
+    needs: gate
+    if: needs.gate.outputs.run == 'true'
     runs-on: [ubuntu-latest]
     name: Review
     # A backstop against a runaway session only.  Coverage is deliberately not capped with
