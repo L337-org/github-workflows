@@ -33,8 +33,9 @@ jobs:
 
 The review needs a caller with its triggers and a `CLAUDE_CODE_OAUTH_TOKEN` secret; see the
 inputs at the top of `.github/workflows/claude-review.yaml`.  A job that calls a reusable
-workflow cannot declare `timeout-minutes`; the called workflow's jobs carry the bound, and the
-hygiene check reports such a call as not checked rather than failing it.
+workflow cannot declare `timeout-minutes`; the called workflow's jobs carry the bound.  The
+hygiene check cannot see those jobs from the calling repository, so it reports such a call as
+not checked rather than failing or passing it.
 
 ## Running the hygiene check locally
 

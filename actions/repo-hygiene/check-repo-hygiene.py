@@ -414,13 +414,14 @@ def check_ci_jobs_are_bounded(root, tracked, files):
         # short list of keys such as uses, with, secrets, needs, if and permissions - so its
         # bound is the called workflow's own jobs.  A call into this repository is covered,
         # because that file's jobs are in this same scan.  A call into another repository is
-        # bounded, or not, by that repository's own run of this check, which cannot be seen here.
+        # not: its jobs are not visible from here, so their timeouts go unchecked and that is
+        # said rather than passed over.
         called = body.get("uses")
         if called is not None:
             if not (isinstance(called, str) and called.startswith("./")):
                 SKIPPED.append(
-                    f"{relative}:{name} calls {called!r}, whose jobs are bounded in that "
-                    f"repository rather than here"
+                    f"{relative}:{name} calls {called!r}, whose jobs live in another "
+                    f"repository, so their timeouts are not checked here"
                 )
             continue
         minutes = body.get("timeout-minutes")
