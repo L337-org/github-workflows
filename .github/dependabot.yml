@@ -1,0 +1,14 @@
+version: 2
+updates:
+  # The workflows here and the composite actions under actions/ both pin third-party actions,
+  # and Dependabot only looks where it is told to.
+  - package-ecosystem: "github-actions"
+    directories:
+      - "/"
+      - "/actions/*"
+    schedule:
+      interval: "weekly"
+    groups:
+      actions:
+        patterns:
+          - "*"

@@ -1,0 +1,228 @@
+name: 'Claude review'
+
+# A reusable review job, called by each repository pinned to a commit of this one.  This
+# repository is public because a public caller cannot use a reusable workflow from a private one.
+#
+# Claude reads and returns a verdict; it never writes to GitHub.  It gets read-only tools, and
+# its review comes back as structured output that a later step posts.  That keeps the posting
+# token out of a session whose input - the diff, and the instruction files on the PR branch -
+# the PR author controls.
+#
+# Two depths.  A PR with no earlier review from this workflow gets a full review of everything
+# it changes, at high effort, with no turn cap, so that pre-existing problems surface once.  A
+# PR that has one gets a delta review of the commits since the commit last reviewed, at lower
+# effort.  The commit reviewed is recorded in a marker at the end of each review comment, which
+# is how a later run, starting from nothing, knows where the previous one stopped.
+on:
+  workflow_call:
+    inputs:
+      pr-number:
+        description: 'The pull request to review.'
+        type: number
+        required: true
+      depth:
+        description: '`auto` picks full or delta from the earlier reviews; `full` forces a full review.'
+        type: string
+        default: auto
+      full-effort:
+        description: 'Effort level for a full review.'
+        type: string
+        default: high
+      delta-effort:
+        description: 'Effort level for a delta review.'
+        type: string
+        default: medium
+      full-model:
+        description: 'Model for a full review.  An alias such as `opus` tracks the latest version; a full model name pins one.'
+        type: string
+        default: opus
+      delta-model:
+        description: 'Model for a delta review.  Empty uses the Claude Code default.'
+        type: string
+        default: ''
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN:
+        description: 'Subscription token from `claude setup-token`.  Usage draws on the allowance of whoever generated it.'
+        required: true
+
+jobs:
+  review:
+    runs-on: [ubuntu-latest]
+    name: Review
+    # A backstop against a runaway session only.  Coverage is deliberately not capped with
+    # --max-turns: later rounds still find real problems, and a cap cuts the review short
+    # silently rather than failing.
+    timeout-minutes: 60
+    # One review at a time per pull request.  Here on the job rather than in the caller, because
+    # a caller's workflow-level group is joined by every comment on the pull request before its
+    # `if:` is evaluated, and a newer pending run replaces an older one: an unrelated comment
+    # would silently cancel a queued review request.  Only runs that pass the caller's `if:`
+    # reach this job.  A request made while one runs waits; of two waiting, the newer one runs.
+    concurrency:
+      group: claude-review-${{ github.repository }}-${{ inputs.pr-number }}
+      cancel-in-progress: false
+    env:
+      GH_TOKEN: ${{ github.token }}
+      PR: ${{ inputs.pr-number }}
+    steps:
+      - name: Look up the pull request
+        id: pr
+        run: |
+          info=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefOid,baseRefName,state)
+          state=$(jq -r '.state' <<<"$info")
+          if [ "$state" != OPEN ]; then
+            echo "::error::Pull request #$PR is $state; only an open pull request is reviewed."
+            exit 1
+          fi
+          jq -r '"head=\(.headRefOid)\nbase=\(.baseRefName)"' <<<"$info" >> "$GITHUB_OUTPUT"
+
+      - name: Check out the pull request head
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.pr.outputs.head }}
+          # The whole history, so the review can diff from the merge base or from the commit
+          # an earlier round reviewed, and can read the log around a change.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Decide the depth and range
+        id: range
+        env:
+          HEAD_SHA: ${{ steps.pr.outputs.head }}
+          BASE_REF: ${{ steps.pr.outputs.base }}
+          DEPTH: ${{ inputs.depth }}
+          FULL_EFFORT: ${{ inputs.full-effort }}
+          DELTA_EFFORT: ${{ inputs.delta-effort }}
+          FULL_MODEL: ${{ inputs.full-model }}
+          DELTA_MODEL: ${{ inputs.delta-model }}
+        run: |
+          merge_base=$(git merge-base "origin/$BASE_REF" "$HEAD_SHA")
+
+          # Only this workflow's own comments count, so a marker typed by anyone else cannot
+          # shrink the next review.  The last marker in the last such comment wins.
+          # Fetched separately so a failed lookup stops the job instead of passing for "no
+          # earlier review" and silently buying a full review.
+          own_comments=$(mktemp)
+          gh api --paginate "repos/$GITHUB_REPOSITORY/issues/$PR/comments" \
+            --jq '.[] | select(.user.login == "github-actions[bot]") | .body' > "$own_comments"
+          last=$({ grep -oE 'claude-review reviewed-sha=[0-9a-f]{40}' "$own_comments" || true; } \
+                 | tail -n 1 | cut -d= -f2)
+
+          mode="full"
+          from=$merge_base
+          reason="no earlier review on this pull request"
+          if [ "$DEPTH" = full ]; then
+            reason="a full review was requested"
+          elif [ -n "$last" ]; then
+            if [ "$last" = "$HEAD_SHA" ]; then
+              mode="none"
+              reason="commit $HEAD_SHA has already been reviewed"
+            elif git merge-base --is-ancestor "$last" "$HEAD_SHA" 2>/dev/null; then
+              mode="delta"
+              from=$last
+              reason="changes since the review of $last"
+            else
+              # A force-push or rebase left the reviewed commit out of the branch, so a delta
+              # would be measured against history the PR no longer has.
+              reason="the last reviewed commit $last is no longer in the branch"
+            fi
+          fi
+
+          effort=$FULL_EFFORT
+          model=$FULL_MODEL
+          if [ "$mode" = delta ]; then effort=$DELTA_EFFORT; model=$DELTA_MODEL; fi
+
+          echo "Review depth: $mode ($reason); range $from..$HEAD_SHA; effort $effort; model ${model:-the Claude Code default}"
+          {
+            echo "mode=$mode"
+            echo "from=$from"
+            echo "merge_base=$merge_base"
+            echo "effort=$effort"
+            echo "model=$model"
+            echo "reason=$reason"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Review
+        id: review
+        if: steps.range.outputs.mode != 'none'
+        uses: anthropics/claude-code-action@12dd8d74c712f5f3669365b2369b558c495b1104 # v1.0.238
+        with:
+          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          # The workflow token, not the Claude GitHub App: Claude needs no GitHub access here,
+          # so the App does not have to be installed for the review to run.
+          github_token: ${{ github.token }}
+          claude_args: |
+            --effort ${{ steps.range.outputs.effort }}
+            ${{ steps.range.outputs.model != '' && format('--model {0}', steps.range.outputs.model) || '' }}
+            --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
+            --disallowedTools "Edit,Write,NotebookEdit,WebFetch,WebSearch"
+            --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","changes_requested"]},"review":{"type":"string"}},"required":["verdict","review"]}'
+          prompt: |
+            You are reviewing pull request #${{ inputs.pr-number }} in ${{ github.repository }}.
+            The pull request head is checked out at ${{ steps.pr.outputs.head }}.
+
+            Depth: ${{ steps.range.outputs.mode }} (${{ steps.range.outputs.reason }}).
+            Review the changes in `git diff ${{ steps.range.outputs.from }}..${{ steps.pr.outputs.head }}`.
+            The pull request as a whole is `git diff ${{ steps.range.outputs.merge_base }}..${{ steps.pr.outputs.head }}`.
+
+            Before reviewing, read the repository's instruction files - `CLAUDE.md`, `AGENTS.md`,
+            and every file they tell you to read for review or for the areas the change touches -
+            and review against them.  They are written for assistants doing the work as well as
+            reviewing it; apply the review rules, and judge the change against the rest.
+
+            For a full review: cover everything the pull request changes, with depth over speed.
+            Read the surrounding code, not only the diff, and look at failure paths, at tests that
+            assert the wrong thing, and at documentation the change makes untrue.  The aim is that
+            a later round finds only problems in later fixes, not problems that were here now.
+
+            For a delta review: the earlier commits have been reviewed.  Review what changed in the
+            range, including how it interacts with the code around it, which you should read.  Do
+            not re-raise points from earlier rounds unless the change makes them worse.
+
+            Label each finding's severity - bug, maintainability, or preference - and give the
+            evidence: file and line, and why.  Say what you checked and what you did not.  Do not
+            manufacture findings; if there is nothing to raise, say so.
+
+            Return `verdict` as `approve` when nothing you found should block a merge, otherwise
+            `changes_requested`, and `review` as the review body in GitHub-flavoured Markdown.  Do
+            not post anything to GitHub yourself.
+
+      - name: Post the review
+        if: always() && steps.range.outputs.mode != ''
+        env:
+          REVIEW_JSON: ${{ steps.review.outputs.structured_output }}
+          HEAD_SHA: ${{ steps.pr.outputs.head }}
+          MODE: ${{ steps.range.outputs.mode }}
+          FROM: ${{ steps.range.outputs.from }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          body=$(mktemp)
+          if [ "$MODE" = none ]; then
+            # Answered rather than skipped silently, because a request by comment otherwise
+            # looks ignored.  No marker: nothing new was reviewed.
+            printf 'Claude review: commit `%s` has already been reviewed, so there is nothing new to review.  Comment `/claude-review full` for a fresh full review.\n' \
+              "${HEAD_SHA:0:12}" > "$body"
+            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+            exit 0
+          fi
+          if [ -z "$REVIEW_JSON" ] || ! verdict=$(jq -er '.verdict' <<<"$REVIEW_JSON"); then
+            # No marker on a failed run, so the next request reviews this range again rather
+            # than treating it as done.
+            printf '## Claude review did not complete\n\nThe %s review of `%s..%s` returned no verdict.  The run log has the reason: %s\n' \
+              "$MODE" "${FROM:0:12}" "${HEAD_SHA:0:12}" "$RUN_URL" > "$body"
+            gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$body"
+            echo "::error::The review returned no structured verdict; see the Review step's output above."
+            exit 1
+          fi
+
+          case "$verdict" in
+            approve) title='Claude review: approve' ;;
+            *)       title='Claude review: changes requested' ;;
+          esac
+          {
+            printf '## %s\n\n' "$title"
+            jq -r '.review' <<<"$REVIEW_JSON"
+            printf '\n\n---\n_%s review of `%s..%s`.  [Run](%s)._\n' "$MODE" "${FROM:0:12}" "${HEAD_SHA:0:12}" "$RUN_URL"
+            printf '\n<!-- claude-review reviewed-sha=%s -->\n' "$HEAD_SHA"
+          } > "$body"
+          gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$body"

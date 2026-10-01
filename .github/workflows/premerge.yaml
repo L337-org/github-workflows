@@ -1,0 +1,49 @@
+name: 'Check inbound changes'
+permissions:
+  contents: read
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+
+  action-pins:
+    # This repository's own action, from this commit, so a change to it is tested by the pull
+    # request that makes it.  `actions/` holds the composite actions, whose `uses:` steps need
+    # the same pins as any workflow's.
+    runs-on: [ubuntu-latest]
+    name: Action pins are immutable
+    timeout-minutes: 5
+    steps:
+      - name: Check out source repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Pins hold
+        uses: ./actions/action-pins
+        with:
+          directories: '.github/workflows actions'
+
+  actionlint:
+    # The workflows and actions here run in other repositories' CI, where a mistake fails a build
+    # that has nothing to do with it, so they are linted before they get there.
+    runs-on: [ubuntu-latest]
+    name: actionlint
+    timeout-minutes: 5
+    steps:
+      - name: Check out source repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+      - name: Workflows lint clean
+        # SC2016 is shellcheck noting that `$x` does not expand inside single quotes.  Here that
+        # is always Markdown backticks in a printf format, which is the intent.
+        run: uvx --from actionlint-py==1.7.12.25 actionlint -ignore 'SC2016'
