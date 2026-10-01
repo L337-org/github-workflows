@@ -60,6 +60,19 @@ inputs are at the top of `.github/workflows/claude-review.yaml`.
 
 ## Running the hygiene check locally
 
+From the root of the repository to check, fetch the script at the commit that repository's
+`repo-hygiene` step pins, so a local run checks what its CI checks, and run it there:
+
+```bash
+sha=<the commit after @ in the repository's repo-hygiene step>
+gh api -H 'Accept: application/vnd.github.raw' \
+  "repos/L337-org/github-workflows/contents/actions/repo-hygiene/check-repo-hygiene.py?ref=$sha" \
+  > /tmp/check-repo-hygiene.py
+uv run --script /tmp/check-repo-hygiene.py .
+```
+
+From a clone of this repository, against any checkout:
+
 ```bash
 uv run --script actions/repo-hygiene/check-repo-hygiene.py /path/to/repository
 ```
