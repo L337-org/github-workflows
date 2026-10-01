@@ -37,9 +37,9 @@ on:
         type: string
         default: opus
       delta-model:
-        description: 'Model for a delta review.  Empty uses the Claude Code default.'
+        description: 'Model for a delta review.  Empty uses the Claude Code default, which is not guaranteed to be the cheaper model.'
         type: string
-        default: ''
+        default: sonnet
     secrets:
       CLAUDE_CODE_OAUTH_TOKEN:
         description: 'Subscription token from `claude setup-token`.  Usage draws on the allowance of whoever generated it.'
@@ -57,7 +57,10 @@ jobs:
     # a caller's workflow-level group is joined by every comment on the pull request before its
     # `if:` is evaluated, and a newer pending run replaces an older one: an unrelated comment
     # would silently cancel a queued review request.  Only runs that pass the caller's `if:`
-    # reach this job.  A request made while one runs waits; of two waiting, the newer one runs.
+    # reach this job.  A run in progress is never cancelled, so a full review always finishes.
+    # Of two waiting, GitHub keeps the newer, and that loses nothing: the range is decided when a
+    # run starts, from the last commit a posted review recorded to the current head, so the
+    # commits a superseded run would have covered fall into the run that replaces it.
     concurrency:
       group: claude-review-${{ github.repository }}-${{ inputs.pr-number }}
       cancel-in-progress: false

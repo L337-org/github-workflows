@@ -44,8 +44,8 @@ inputs are at the top of `.github/workflows/claude-review.yaml`.
 
 - **Depth.**  A pull request with no earlier review from this workflow gets a full review of
   everything it changes, by default with `opus` at high effort.  One that has been reviewed gets a
-  delta review of the commits since, by default with the Claude Code default model at medium
-  effort.  Neither has a turn cap; the job's 60-minute timeout is the only bound.
+  delta review of the commits since, by default with `sonnet` at medium effort.  A delta review
+  reads the surrounding code and the whole pull request's diff, but not the earlier review.  Neither has a turn cap; the job's 60-minute timeout is the only bound.
 - **Where the last review stopped.**  Each review comment ends with a marker naming the commit it
   reviewed.  Only this workflow's own comments are read for it.  A force-push that drops that
   commit from the branch falls back to a full review, and a request for a commit already
@@ -54,7 +54,10 @@ inputs are at the top of `.github/workflows/claude-review.yaml`.
   returns a verdict, approve or changes requested, and a review body as structured output, and a
   later step posts them, so the session never holds a token that can write to GitHub.
 - **One at a time.**  Runs for the same pull request queue on the job, so only real requests
-  reach the queue.  Of two waiting, the newer one runs.
+  reach the queue.  A running review is never cancelled.  Of two waiting, the newer one runs,
+  and the range it covers starts at the last commit a posted review recorded, so commits the
+  older one would have reviewed are not skipped.  A burst of pushes during a review produces one
+  delta review of all of them.
 - **The caller needs** `contents: read` and `pull-requests: write`, and must pass the secret
   explicitly.
 
