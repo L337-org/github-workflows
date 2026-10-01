@@ -45,11 +45,23 @@ inputs are at the top of `.github/workflows/claude-review.yaml`.
 - **Depth.**  A pull request with no earlier review from this workflow gets a full review of
   everything it changes, by default with `opus` at high effort.  One that has been reviewed gets a
   delta review of the commits since, by default with `sonnet` at medium effort.  A delta review
-  reads the surrounding code and the whole pull request's diff, but not the earlier review.  Neither has a turn cap; the job's 60-minute timeout is the only bound.
+  reads the surrounding code and the whole pull request's diff.  Neither has a turn cap; the
+  job's 60-minute timeout is the only bound.
+- **Earlier rounds.**  A delta review is given the previous review and every comment posted
+  since, and reports under four headings: resolved, still open, declined, and new.  A finding
+  someone rejects in a reply is listed as declined and not raised again without new evidence,
+  and each review carries its open and declined findings forward, so no round needs the ones
+  before it.  A full review after earlier rounds gets the previous review and every reply since
+  the first, so a rewrite does not resurrect a declined finding.  The comments are capped at
+  60,000 characters, oldest dropped first, and the prompt says when that happened.
+- **A bound on automatic rounds.**  The caller says, with `push-triggered`, whether a push
+  started the run.  After `max-auto-reviews` push-triggered reviews (default 10) since the last
+  full review, a push posts one notice that automatic reviews are paused and then stays quiet.
+  A request by comment always runs, and a full review restarts the count.
 - **Where the last review stopped.**  Each review comment ends with a marker naming the commit it
-  reviewed.  Only this workflow's own comments are read for it.  A force-push that drops that
-  commit from the branch falls back to a full review, and a request for a commit already
-  reviewed is answered without running one.
+  reviewed, the depth, and whether a push started it.  Only this workflow's own comments are
+  read for it.  A force-push that drops that commit from the branch falls back to a full review,
+  and a request for a commit already reviewed is answered without running one.
 - **What Claude can do.**  Read the checkout and run `git diff`, `git log` and `git show`.  It
   returns a verdict, approve or changes requested, and a review body as structured output, and a
   later step posts them, so the session never holds a token that can write to GitHub.
