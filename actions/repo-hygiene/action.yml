@@ -1,0 +1,23 @@
+name: 'Repository hygiene'
+description: 'Check the conventions every repository in the organisation shares, over the checked-out repository.'
+
+# Run after actions/checkout in the calling job, which keeps its own timeout-minutes.  The script
+# is this action's copy at the commit the caller pins, so every repository pinning one commit
+# runs the same checks.
+inputs:
+  path:
+    description: 'The repository to check.  Empty means the workspace the caller checked out.'
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Set up uv
+      uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
+
+    - name: Repository conventions hold
+      shell: bash
+      env:
+        REPOSITORY_PATH: ${{ inputs.path }}
+      run: uv run --script "$GITHUB_ACTION_PATH/check-repo-hygiene.py" "${REPOSITORY_PATH:-$GITHUB_WORKSPACE}"
