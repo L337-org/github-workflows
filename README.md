@@ -31,11 +31,32 @@ jobs:
       - uses: L337-org/github-workflows/actions/action-pins@<sha>
 ```
 
-The review needs a caller with its triggers and a `CLAUDE_CODE_OAUTH_TOKEN` secret; see the
-inputs at the top of `.github/workflows/claude-review.yaml`.  A job that calls a reusable
-workflow cannot declare `timeout-minutes`; the called workflow's jobs carry the bound.  The
-hygiene check cannot see those jobs from the calling repository, so it reports such a call as
-not checked rather than failing or passing it.
+A job that calls a reusable workflow cannot declare `timeout-minutes`; the called workflow's
+jobs carry the bound.  The hygiene check cannot see those jobs from the calling repository, so it
+reports such a call as not checked rather than failing or passing it.
+
+## The Claude review
+
+The caller decides when a review runs and who may ask for one; this workflow decides how it
+runs.  It needs a `CLAUDE_CODE_OAUTH_TOKEN` secret, a subscription token from
+`claude setup-token`, and every review draws on the allowance of whoever generated it.  Its
+inputs are at the top of `.github/workflows/claude-review.yaml`.
+
+- **Depth.**  A pull request with no earlier review from this workflow gets a full review of
+  everything it changes, by default with `opus` at high effort.  One that has been reviewed gets a
+  delta review of the commits since, by default with the Claude Code default model at medium
+  effort.  Neither has a turn cap; the job's 60-minute timeout is the only bound.
+- **Where the last review stopped.**  Each review comment ends with a marker naming the commit it
+  reviewed.  Only this workflow's own comments are read for it.  A force-push that drops that
+  commit from the branch falls back to a full review, and a request for a commit already
+  reviewed is answered without running one.
+- **What Claude can do.**  Read the checkout and run `git diff`, `git log` and `git show`.  It
+  returns a verdict, approve or changes requested, and a review body as structured output, and a
+  later step posts them, so the session never holds a token that can write to GitHub.
+- **One at a time.**  Runs for the same pull request queue on the job, so only real requests
+  reach the queue.  Of two waiting, the newer one runs.
+- **The caller needs** `contents: read` and `pull-requests: write`, and must pass the secret
+  explicitly.
 
 ## Running the hygiene check locally
 

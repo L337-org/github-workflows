@@ -32,8 +32,12 @@ on:
         description: 'Effort level for a delta review.'
         type: string
         default: medium
-      model:
-        description: 'Model for both depths.  Empty uses the Claude Code default.'
+      full-model:
+        description: 'Model for a full review.  An alias such as `opus` tracks the latest version; a full model name pins one.'
+        type: string
+        default: opus
+      delta-model:
+        description: 'Model for a delta review.  Empty uses the Claude Code default.'
         type: string
         default: ''
     secrets:
@@ -49,6 +53,14 @@ jobs:
     # --max-turns: later rounds still find real problems, and a cap cuts the review short
     # silently rather than failing.
     timeout-minutes: 60
+    # One review at a time per pull request.  Here on the job rather than in the caller, because
+    # a caller's workflow-level group is joined by every comment on the pull request before its
+    # `if:` is evaluated, and a newer pending run replaces an older one: an unrelated comment
+    # would silently cancel a queued review request.  Only runs that pass the caller's `if:`
+    # reach this job.  A request made while one runs waits; of two waiting, the newer one runs.
+    concurrency:
+      group: claude-review-${{ github.repository }}-${{ inputs.pr-number }}
+      cancel-in-progress: false
     env:
       GH_TOKEN: ${{ github.token }}
       PR: ${{ inputs.pr-number }}
@@ -81,6 +93,8 @@ jobs:
           DEPTH: ${{ inputs.depth }}
           FULL_EFFORT: ${{ inputs.full-effort }}
           DELTA_EFFORT: ${{ inputs.delta-effort }}
+          FULL_MODEL: ${{ inputs.full-model }}
+          DELTA_MODEL: ${{ inputs.delta-model }}
         run: |
           merge_base=$(git merge-base "origin/$BASE_REF" "$HEAD_SHA")
 
@@ -115,14 +129,16 @@ jobs:
           fi
 
           effort=$FULL_EFFORT
-          if [ "$mode" = delta ]; then effort=$DELTA_EFFORT; fi
+          model=$FULL_MODEL
+          if [ "$mode" = delta ]; then effort=$DELTA_EFFORT; model=$DELTA_MODEL; fi
 
-          echo "Review depth: $mode ($reason); range $from..$HEAD_SHA; effort $effort"
+          echo "Review depth: $mode ($reason); range $from..$HEAD_SHA; effort $effort; model ${model:-the Claude Code default}"
           {
             echo "mode=$mode"
             echo "from=$from"
             echo "merge_base=$merge_base"
             echo "effort=$effort"
+            echo "model=$model"
             echo "reason=$reason"
           } >> "$GITHUB_OUTPUT"
 
@@ -137,7 +153,7 @@ jobs:
           github_token: ${{ github.token }}
           claude_args: |
             --effort ${{ steps.range.outputs.effort }}
-            ${{ inputs.model != '' && format('--model {0}', inputs.model) || '' }}
+            ${{ steps.range.outputs.model != '' && format('--model {0}', steps.range.outputs.model) || '' }}
             --allowedTools "Read,Grep,Glob,Bash(git diff:*),Bash(git log:*),Bash(git show:*)"
             --disallowedTools "Edit,Write,NotebookEdit,WebFetch,WebSearch"
             --json-schema '{"type":"object","properties":{"verdict":{"type":"string","enum":["approve","changes_requested"]},"review":{"type":"string"}},"required":["verdict","review"]}'
