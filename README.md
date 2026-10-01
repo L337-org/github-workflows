@@ -72,7 +72,9 @@ inputs are at the top of `.github/workflows/claude-review.yaml`.
   delta review of all of them.
 - **Bot and fork pull requests are skipped.**  GitHub gives no secrets to a run started by
   Dependabot or by a fork pull request, and bot pull requests are reviewed by hand, so a gate job
-  skips those runs with a notice instead of failing.  A notice saying no token arrived, on a
+  skips those runs with a notice instead of failing.  A fork pull request is refused even when a
+  maintainer asks by comment, because that run carries the token over text written by someone
+  with no access; the request gets a reply saying so.  A notice saying no token arrived, on a
   pull request that is neither, means the secret is missing or not passed.
 - **The caller needs** `contents: read` and `pull-requests: write`, and must pass the secret
   explicitly.
