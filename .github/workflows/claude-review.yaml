@@ -274,8 +274,10 @@ jobs:
             manufacture findings; if there is nothing to raise, say so.
 
             Return `verdict` as `approve` when nothing you found should block a merge, otherwise
-            `changes_requested`, and `review` as the review body in GitHub-flavoured Markdown.  Do
-            not post anything to GitHub yourself.
+            `changes_requested`, and `review` as the review body in GitHub-flavoured Markdown.  The
+            comment's title and the verdict are added above the body for you, so start the body
+            with its first section and give it no title of its own.  Do not post anything to
+            GitHub yourself.
 
       - name: Post the review
         if: always() && steps.range.outputs.mode != ''
