@@ -60,8 +60,9 @@ inputs are at the top of `.github/workflows/claude-review.yaml`.
   A request by comment always runs, and a full review restarts the count.
 - **Where the last review stopped.**  Each review comment ends with a marker naming the commit it
   reviewed, the depth, and whether a push started it.  Only this workflow's own comments are
-  read for it.  A force-push that drops that commit from the branch falls back to a full review,
-  and a request for a commit already reviewed is answered without running one.
+  read for it.  A force-push that drops that commit from the branch falls back to a full review.
+  A request by comment for a commit already reviewed is answered without running one; a push of
+  one only says so in the log, because nobody asked.
 - **What Claude can do.**  Read the checkout and run `git diff`, `git log` and `git show`.  It
   returns a verdict, approve or changes requested, and a review body as structured output, and a
   later step posts them, so the session never holds a token that can write to GitHub.
@@ -72,10 +73,16 @@ inputs are at the top of `.github/workflows/claude-review.yaml`.
   delta review of all of them.
 - **Bot and fork pull requests are skipped.**  GitHub gives no secrets to a run started by
   Dependabot or by a fork pull request, and bot pull requests are reviewed by hand, so a gate job
-  skips those runs with a notice instead of failing.  A fork pull request is refused even when a
+  skips those runs with a notice instead of failing.  A pull request a bot opened is skipped
+  whoever starts the run, since a person pushing to it or asking by comment brings the token with
+  them; a request by comment gets a reply saying so.  A fork pull request is refused even when a
   maintainer asks by comment, because that run carries the token over text written by someone
-  with no access; the request gets a reply saying so.  A notice saying no token arrived, on a
-  pull request that is neither, means the secret is missing or not passed.
+  with no access; the request gets a reply saying so.  A notice saying no token arrived, on a pull
+  request that is neither, means the secret is missing or not passed.
+- **A review that returns no verdict says why.**  The comment headed `Claude review did not
+  complete` and the run log both carry the session's result record - its status and error text,
+  such as a usage limit - without the usage and cost figures.  The comment carries no marker, so
+  the next request reviews the same range again.
 - **The caller needs** `contents: read` and `pull-requests: write`, and must pass the secret
   explicitly.
 

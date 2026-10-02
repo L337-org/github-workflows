@@ -62,6 +62,9 @@ jobs:
     # GitHub gives no secrets to a run that Dependabot or a fork pull request started, and the
     # review action rejects a bot actor, so either would otherwise end as a red job on every
     # such pull request.  Those are skipped by design: bot pull requests are reviewed by hand.
+    # A bot pull request is skipped by its author as well as its actor, because a person pushing
+    # to one or asking by comment starts a run that carries the token, and the review is then
+    # spent on a pull request nobody meant it for.
     # The skip is reported as a notice rather than passed over in silence, so a missing token
     # in a repository that should have one is visible.
     #
@@ -74,7 +77,7 @@ jobs:
     outputs:
       run: ${{ steps.check.outputs.run }}
     steps:
-      - name: Check for a token, a human actor and a same-repository branch
+      - name: Check for a token, a human actor and author, and a same-repository branch
         id: check
         env:
           HAS_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN != '' }}
@@ -84,8 +87,10 @@ jobs:
           PR: ${{ inputs.pr-number }}
         run: |
           # Fetched first and on its own, so a failed lookup stops the job rather than reading
-          # as "not a fork".
-          cross=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json isCrossRepository --jq '.isCrossRepository')
+          # as "not a fork" or "not a bot".
+          info=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json isCrossRepository,author \
+            --jq '[.isCrossRepository, .author.is_bot, .author.login] | @tsv')
+          IFS=$'\t' read -r cross author_bot author <<<"$info"
           if [ "$cross" = true ]; then
             echo "::notice::Review refused: pull request #$PR comes from a fork, and fork pull requests are not reviewed."
             if [ "$EVENT" = issue_comment ]; then
@@ -98,6 +103,13 @@ jobs:
             echo "run=false" >> "$GITHUB_OUTPUT"
           elif [[ "$ACTOR" == *'[bot]' ]]; then
             echo "::notice::Review skipped: $ACTOR is a bot, and bot pull requests are reviewed by hand."
+            echo "run=false" >> "$GITHUB_OUTPUT"
+          elif [ "$author_bot" = true ]; then
+            echo "::notice::Review skipped: pull request #$PR was opened by the bot $author, and bot pull requests are reviewed by hand, whoever starts the run."
+            if [ "$EVENT" = issue_comment ]; then
+              gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" \
+                --body 'Claude review: skipped.  This pull request was opened by a bot, and bot pull requests are reviewed by hand rather than automatically.'
+            fi
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
             echo "run=true" >> "$GITHUB_OUTPUT"
@@ -331,6 +343,7 @@ jobs:
         if: always() && steps.range.outputs.mode != ''
         env:
           REVIEW_JSON: ${{ steps.review.outputs.structured_output }}
+          EXECUTION_FILE: ${{ steps.review.outputs.execution_file }}
           HEAD_SHA: ${{ steps.pr.outputs.head }}
           MODE: ${{ steps.range.outputs.mode }}
           FROM: ${{ steps.range.outputs.from }}
@@ -351,6 +364,12 @@ jobs:
             gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$body"
             exit 0
           fi
+          if [ "$MODE" = none ] && [ "$TRIGGER" = push ]; then
+            # Nobody asked, so a comment would be noise on the pull request.  A push of a commit
+            # already reviewed - a re-run, or a force-push back to it - leaves only this line.
+            echo "Commit ${HEAD_SHA:0:12} has already been reviewed, so there is nothing new to review."
+            exit 0
+          fi
           if [ "$MODE" = none ]; then
             # Answered rather than skipped silently, because a request by comment otherwise
             # looks ignored.  No marker: nothing new was reviewed.
@@ -362,8 +381,40 @@ jobs:
           if [ -z "$REVIEW_JSON" ] || ! verdict=$(jq -er '.verdict' <<<"$REVIEW_JSON"); then
             # No marker on a failed run, so the next request reviews this range again rather
             # than treating it as done.
-            printf '## Claude review did not complete\n\nThe %s review of `%s..%s` returned no verdict.  The run log has the reason: %s\n' \
-              "$MODE" "${FROM:0:12}" "${HEAD_SHA:0:12}" "$RUN_URL" > "$body"
+            #
+            # The reason is the session's result record: its status and error text, without the
+            # usage and cost figures beside them.  The action's own log line prints the record
+            # with the error text left out, so a usage limit reads only as "no verdict".  The
+            # action writes every session message to the execution file and sets its path even
+            # when it fails for want of structured output (claude-code-action v1.0.238,
+            # src/entrypoints/run.ts), and the result record is the last of them.  The text is
+            # capped, because a session that wrote its review as prose rather than structured
+            # output returns the whole review there.
+            reason=""
+            if [ -n "$EXECUTION_FILE" ] && [ -f "$EXECUTION_FILE" ]; then
+              reason=$(jq '[.[] | select(.type == "result")] | last
+                | if . == null then empty
+                  else {subtype, is_error, api_error_status, errors, result}
+                    | with_entries(select(.value != null))
+                    | if (.result | type) == "string" and (.result | length) > 2000
+                      then .result = .result[:2000] + " [truncated]" else . end
+                  end' "$EXECUTION_FILE" 2>&1) || reason="The execution file could not be read: $reason"
+            fi
+            if [ -z "$reason" ]; then
+              reason="The session left no result record, so it stopped before Claude answered; the Review step's log has what happened."
+            fi
+            echo "Result record:"
+            echo "$reason"
+            {
+              printf '## Claude review did not complete\n\nThe %s review of `%s..%s` returned no verdict.  ' \
+                "$MODE" "${FROM:0:12}" "${HEAD_SHA:0:12}"
+              if jq -e 'type == "object"' >/dev/null 2>&1 <<<"$reason"; then
+                printf 'The session reported:\n\n```json\n%s\n```\n\n' "$reason"
+              else
+                printf '%s\n\n' "$reason"
+              fi
+              printf 'The run log has the rest: %s\n' "$RUN_URL"
+            } > "$body"
             gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$body"
             echo "::error::The review returned no structured verdict; see the Review step's output above."
             exit 1
