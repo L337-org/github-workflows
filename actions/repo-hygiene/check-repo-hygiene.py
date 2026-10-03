@@ -77,7 +77,7 @@ TRACKER_KEY = re.compile(r"\b[A-Z]{2,10}-\d+\b(?!\.\d)")
 
 # Same shape, not tracker keys.  Each is a real external standard, so this is a list of
 # evidenced exceptions rather than a way to quiet a genuine hit.
-NOT_A_TRACKER_KEY = re.compile(r"\b(?:ISO-\d+|RFC-\d+|SHA-\d+|UTF-\d+|AES-\d+|PEP-\d+|CVE-\d+|SMETS-\d+|FLEX-\d+)\b")
+NOT_A_TRACKER_KEY = re.compile(r"\b(?:ISO-\d+|RFC-\d+|SHA-\d+|UTF-\d+|AES-\d+|PEP-\d+|CVE-\d+|SMETS-\d+|FLEX-\d+|GPL-\d+|LGPL-\d+|AGPL-\d+)\b")
 
 # Any link into the internal Atlassian site, not only a wiki one.  Review asked whether this
 # should require a /wiki/ path, since the name said "wiki link" while the pattern also matched a
