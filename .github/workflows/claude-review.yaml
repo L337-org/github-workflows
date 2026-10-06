@@ -306,6 +306,18 @@ jobs:
             assert the wrong thing, and at documentation the change makes untrue.  The aim is that
             a later round finds only problems in later fixes, not problems that were here now.
 
+            Check every line the change adds or edits in documentation, code comments, workflow
+            comments and instruction files for recorded state: a claim about how things are now
+            that the system can already answer, or that will become untrue when something else
+            changes.  Examples: counts and sizes ("1150 files", "94 kinds"); figures measured on a
+            particular day; what was tested, shown to fail or checked when something was done;
+            "currently", "today", "for now", "not yet", "until X lands"; descriptions of settings,
+            accounts or configuration held somewhere else.  Raise each as a maintainability
+            finding even when it is true today, and say where the fact already lives - the
+            command, test or file that answers it, or the commit message or pull request, where a
+            record of what was done belongs.  Not findings: rules and the reasons for them,
+            behaviour that code or tests hold true, and accepted limitations stated as limitations.
+
             For a delta review: the earlier commits have been reviewed.  Review what changed in the
             range, including how it interacts with the code around it, which you should read.
             Structure the review under these four headings, in this order, so a reader does not

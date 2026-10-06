@@ -63,6 +63,12 @@ inputs are at the top of `.github/workflows/claude-review.yaml`.
   read for it.  A force-push that drops that commit from the branch falls back to a full review.
   A request by comment for a commit already reviewed is answered without running one; a push of
   one only says so in the log, because nobody asked.
+- **Recorded state.**  Every review checks what the change adds to documentation and comments
+  for claims about how things are now - counts, measured figures, what was tested, "currently"
+  or "until X lands", settings held elsewhere - and raises each, even when true on the day,
+  saying where the fact already lives.  Such claims go stale as soon as something changes and are
+  then worse than nothing; a record of what was done belongs in the commit message or pull
+  request.
 - **What Claude can do.**  Read the checkout and run `git diff`, `git log` and `git show`.  It
   returns a verdict, approve or changes requested, and a review body as structured output, and a
   later step posts them, so the session never holds a token that can write to GitHub.
