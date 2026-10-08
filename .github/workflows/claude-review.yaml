@@ -276,7 +276,7 @@ jobs:
       - name: Review
         id: review
         if: steps.range.outputs.mode == 'full' || steps.range.outputs.mode == 'delta'
-        uses: anthropics/claude-code-action@12dd8d74c712f5f3669365b2369b558c495b1104 # v1.0.238
+        uses: anthropics/claude-code-action@6c690188da61cf16ee7debb28383ba67f02abb4c # v1.0.242
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           # The workflow token, not the Claude GitHub App: Claude needs no GitHub access here,
