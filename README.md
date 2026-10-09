@@ -146,9 +146,12 @@ jobs:
   secret set on the organisation is every repository's default, and a repository secret of the
   same name overrides it.  An incoming webhook posts to one channel and can do nothing else.
 - **A post that fails, fails the watcher's run**, with Slack's answer in the error: a missing
-  secret, a webhook Slack refuses, or Slack unreachable after retries.  So a broken webhook shows
-  as a red watcher run rather than a failure that reached nobody.  A transient refusal is
-  retried, which can post the same failure twice.
+  secret, a webhook Slack refuses, or Slack unreachable after retries.  A transient refusal is
+  retried, which can post the same failure twice.  **Accepted limitation:** the watcher's run is
+  itself a run nobody is watching, and nothing reports it, so a webhook that stops working is
+  noticed only by the absence of posts.  Filing an issue instead was considered: in the failing
+  repository it scatters them, and in this one it needs either a credential that can write
+  across repositories or a scheduled sweep of every repository's watcher runs.
 - **The watcher only fires from the default branch**, where GitHub reads `workflow_run`
   triggers.  So a change to it is tested only once merged.
 - **The caller must grant** `actions: read` and `contents: read`, as the example does, or
