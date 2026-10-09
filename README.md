@@ -78,6 +78,12 @@ inputs are at the top of `.github/workflows/claude-review.yaml`.
   and the range it covers starts at the last commit a posted review recorded, so commits the
   older one would have reviewed are not skipped.  A burst of pushes during a review produces one
   delta review of all of them.
+- **A request by comment reviews the head it was made against.**  The run starts after the
+  comment, so the gate reads when the branch was last pushed from GitHub's activity record,
+  which the pusher cannot set, and refuses the request, with a reply saying to ask again, if
+  that push is at or after the comment or is not of the current head.  The review then checks
+  out the head the gate passed rather than looking it up again.  So nothing pushed after the
+  request is reviewed under the token.
 - **Bot and fork pull requests are skipped.**  GitHub gives no secrets to a run started by
   Dependabot or by a fork pull request, and bot pull requests are reviewed by hand, so a gate job
   skips those runs with a notice instead of failing.  A pull request a bot opened is skipped
