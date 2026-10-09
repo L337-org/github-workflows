@@ -71,11 +71,20 @@ jobs:
     # A fork pull request is refused even when a maintainer asks by comment, by decision: that
     # run carries the token while the reviewed text is written by someone with no access, who
     # could steer the verdict.  A refused request gets a reply so it does not look ignored.
+    #
+    # A request by comment is honoured only for the head that was there when it was made.  The
+    # run starts after the comment, so without this a push in between would put code the
+    # requester never saw under a run carrying the token.  The time of the branch's latest push
+    # comes from GitHub's activity record, which the pusher cannot set, unlike a commit's own
+    # date, and that push must be of the head this gate passes on.  A push at or after the
+    # comment refuses the request with a reply saying to ask again.  The review checks out the
+    # head this gate decided on rather than looking it up again, so nothing can slip in after.
     runs-on: [ubuntu-latest]
     name: Can this be reviewed
     timeout-minutes: 2
     outputs:
       run: ${{ steps.check.outputs.run }}
+      head: ${{ steps.check.outputs.head }}
     steps:
       - name: Check for a token, a human actor and author, and a same-repository branch
         id: check
@@ -85,12 +94,14 @@ jobs:
           EVENT: ${{ github.event_name }}
           GH_TOKEN: ${{ github.token }}
           PR: ${{ inputs.pr-number }}
+          COMMENT_AT: ${{ github.event.comment.created_at }}
         run: |
           # Fetched first and on its own, so a failed lookup stops the job rather than reading
           # as "not a fork" or "not a bot".
-          info=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json isCrossRepository,author \
-            --jq '[.isCrossRepository, .author.is_bot, .author.login] | @tsv')
-          IFS=$'\t' read -r cross author_bot author <<<"$info"
+          info=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" \
+            --json isCrossRepository,author,headRefName,headRefOid \
+            --jq '[.isCrossRepository, .author.is_bot, .author.login, .headRefName, .headRefOid] | @tsv')
+          IFS=$'\t' read -r cross author_bot author head_ref head <<<"$info"
           if [ "$cross" = true ]; then
             echo "::notice::Review refused: pull request #$PR comes from a fork, and fork pull requests are not reviewed."
             if [ "$EVENT" = issue_comment ]; then
@@ -112,7 +123,35 @@ jobs:
             fi
             echo "run=false" >> "$GITHUB_OUTPUT"
           else
-            echo "run=true" >> "$GITHUB_OUTPUT"
+            refused=""
+            if [ "$EVENT" = issue_comment ]; then
+              comment_at=$COMMENT_AT
+              # The newest activity on the branch, of any kind: a push, a force-push or its
+              # creation.  A failed lookup stops the job rather than reading as "no push".
+              ref=$(jq -rn --arg b "refs/heads/$head_ref" '$b|@uri')
+              if ! latest=$(gh api "repos/$GITHUB_REPOSITORY/activity?ref=$ref&per_page=1" \
+                  --jq '.[0] // empty | [.timestamp, .after] | @tsv' 2>&1); then
+                echo "::error::Could not read when \`$head_ref\` was last pushed, so the review requested by comment on #$PR was not run: $latest" >&2
+                exit 1
+              fi
+              IFS=$'\t' read -r pushed_at pushed_sha <<<"$latest"
+              if [ -z "$pushed_at" ] || [ -z "$comment_at" ]; then
+                refused="GitHub holds no record of when \`$head_ref\` was last pushed, or of when the review was asked for, so the head cannot be shown to predate the request."
+              elif [ "$pushed_sha" != "$head" ]; then
+                refused="the latest push to \`$head_ref\` is of \`${pushed_sha:0:12}\`, not of the head \`${head:0:12}\`, so the head cannot be shown to predate the request."
+              elif [[ $(date -d "$pushed_at" +%s) -ge $(date -d "$comment_at" +%s) ]]; then
+                refused="\`$head_ref\` was pushed at $pushed_at, at or after the request at $comment_at, so the head is not the one the request was made against."
+              fi
+            fi
+            if [ -n "$refused" ]; then
+              echo "::notice::Review refused: $refused"
+              gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" \
+                --body "Claude review: refused, because $refused  Ask again to review the current head."
+              echo "run=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "run=true" >> "$GITHUB_OUTPUT"
+              echo "head=$head" >> "$GITHUB_OUTPUT"
+            fi
           fi
 
   review:
@@ -141,14 +180,22 @@ jobs:
     steps:
       - name: Look up the pull request
         id: pr
+        env:
+          # The head the gate checked, not the pull request's head now, which may have moved.
+          GATE_HEAD: ${{ needs.gate.outputs.head }}
         run: |
-          info=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json headRefOid,baseRefName,state)
+          info=$(gh pr view "$PR" --repo "$GITHUB_REPOSITORY" --json baseRefName,state)
           state=$(jq -r '.state' <<<"$info")
           if [ "$state" != OPEN ]; then
             echo "::error::Pull request #$PR is $state; only an open pull request is reviewed."
             exit 1
           fi
-          jq -r '"head=\(.headRefOid)\nbase=\(.baseRefName)"' <<<"$info" >> "$GITHUB_OUTPUT"
+          if ! [[ "$GATE_HEAD" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::The gate passed on no head commit (got '$GATE_HEAD'), so there is nothing safe to check out."
+            exit 1
+          fi
+          echo "head=$GATE_HEAD" >> "$GITHUB_OUTPUT"
+          jq -r '"base=\(.baseRefName)"' <<<"$info" >> "$GITHUB_OUTPUT"
 
       - name: Check out the pull request head
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
