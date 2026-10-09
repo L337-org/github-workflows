@@ -37,6 +37,7 @@ __license__ = "MIT"
 # so it buys nothing - and a __future__ import must precede every other statement, which would
 # force the header block below it and out of the position the convention puts it in.
 
+import json
 import pathlib
 import re
 import shutil
@@ -104,6 +105,16 @@ MIN_TIMEOUT_MINUTES = 1
 MAX_TIMEOUT_MINUTES = 60
 
 BINARY_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".gz", ".zip", ".deb", ".whl")
+
+# --- unattended runs report their failures --------------------------------------------------
+# The triggers of a run nobody is watching.  A pull request's run is watched by its author, and
+# a manual run by whoever started it.
+UNATTENDED = ("schedule", "push", "release")
+
+# A call to the shared Slack reporter, from another repository or from this one.
+REPORTER = re.compile(
+    r"(?:\./|L337-org/github-workflows/)\.github/workflows/slack-on-failure\.yaml(?:@|$)"
+)
 
 # Compared as a resolved path, not a basename: another file of the same name elsewhere in a
 # repository would otherwise be dropped from the scan without anything saying so.  Only matters
@@ -254,8 +265,8 @@ def is_searchable_text(path):
     return True
 
 
-def workflow_jobs(root, tracked):
-    """Every CI job, as `(repo-relative path, job id, job body)`.
+def workflow_documents(root, tracked):
+    """Every tracked workflow, parsed, as `(repo-relative path, document)`.
 
     Sourced from the tracked listing rather than a glob, for the same reason: an untracked
     workflow a developer left lying about is not part of the repository.
@@ -264,15 +275,14 @@ def workflow_jobs(root, tracked):
         root (pathlib.Path): repository root.
         tracked (list): every tracked path, unfiltered - deliberately not the searchable-text subset,
             because a workflow that is not readable text must still be reported rather than
-            quietly dropped from the bounds checks.
+            quietly dropped from the checks.
 
     Returns:
-        list: One triple per job.
+        list: One pair per workflow file.
 
     Raises:
-        CannotEvaluate: No workflow files are tracked, one could not be read, or one is not
-            valid YAML, is not a mapping, declares no usable `jobs:` mapping, or gives a job
-            a body that is not a mapping.
+        CannotEvaluate: No workflow files are tracked, or one could not be read, is not valid
+            YAML, or is not a mapping.
     """
     import yaml
 
@@ -281,7 +291,7 @@ def workflow_jobs(root, tracked):
     if not workflows:
         raise CannotEvaluate("no tracked workflow files found, so the CI checks would verify nothing")
 
-    jobs = []
+    documents = []
     for path in workflows:
         relative = path.relative_to(root)
         try:
@@ -290,6 +300,26 @@ def workflow_jobs(root, tracked):
             raise CannotEvaluate(f"{relative} is not valid YAML: {exc}") from exc
         if not isinstance(document, dict):
             raise CannotEvaluate(f"{relative} does not parse as a YAML mapping")
+        documents.append((relative, document))
+    return documents
+
+
+def workflow_jobs(root, tracked):
+    """Every CI job, as `(repo-relative path, job id, job body)`.
+
+    Args:
+        root (pathlib.Path): repository root.
+        tracked (list): every tracked path, unfiltered, as workflow_documents takes it.
+
+    Returns:
+        list: One triple per job.
+
+    Raises:
+        CannotEvaluate: As workflow_documents, or a workflow declares no usable `jobs:`
+            mapping, or gives a job a body that is not a mapping.
+    """
+    jobs = []
+    for relative, document in workflow_documents(root, tracked):
         declared = document.get("jobs")
         # Not `or {}`: a missing or null `jobs:` would become an empty mapping and the workflow
         # would be skipped in silence while the bounds checks reported success.
@@ -464,6 +494,139 @@ def check_ci_jobs_are_bounded(root, tracked, files):
                 f"same as no bound"
             )
     return findings
+
+
+def workflow_triggers(relative, document):
+    """The names of the events that start a workflow.
+
+    PyYAML reads YAML 1.1, where a bare `on` key is the boolean true, so the key is looked up
+    both ways.
+
+    Args:
+        relative (pathlib.Path): the workflow's repo-relative path, for the error.
+        document (dict): the parsed workflow.
+
+    Returns:
+        set: The event names.
+
+    Raises:
+        CannotEvaluate: The workflow has no `on:`, or one of a shape GitHub does not accept.
+    """
+    on = document.get("on", document.get(True))
+    if isinstance(on, str):
+        return {on}
+    if isinstance(on, list) and all(isinstance(event, str) for event in on):
+        return set(on)
+    if isinstance(on, dict) and all(isinstance(event, str) for event in on):
+        return set(on)
+    raise CannotEvaluate(f"{relative} has no `on:` this check can read (got {on!r})")
+
+
+def unattended_run_findings(documents):
+    """The findings of check_unattended_runs_report_failures, over parsed workflows.
+
+    Args:
+        documents (list): `(repo-relative path, document)` pairs, as workflow_documents returns.
+
+    Returns:
+        list: The findings.
+
+    Raises:
+        CannotEvaluate: A workflow's `on:` cannot be read, via workflow_triggers.
+    """
+    findings = []
+    # Workflow name -> the triggers some watcher reports for it.
+    reported = {}
+    watchers = []
+    for relative, document in documents:
+        jobs = document.get("jobs")
+        calls = [
+            body for body in (jobs.values() if isinstance(jobs, dict) else ())
+            if isinstance(body, dict) and isinstance(body.get("uses"), str)
+            and REPORTER.match(body["uses"])
+        ]
+        if not calls:
+            continue
+        watchers.append(relative)
+        on = document.get("on", document.get(True))
+        run = on.get("workflow_run") if isinstance(on, dict) else None
+        names = run.get("workflows") if isinstance(run, dict) else None
+        if not (isinstance(names, list) and names and all(isinstance(n, str) for n in names)):
+            findings.append(
+                f"{relative} calls the Slack reporter but has no `on: workflow_run: workflows:` "
+                f"list of workflow names, so it reports nothing"
+            )
+            continue
+        for body in calls:
+            raw = (body.get("with") or {}).get("events") if isinstance(body.get("with") or {}, dict) else None
+            try:
+                events = json.loads(raw) if isinstance(raw, str) else None
+            except json.JSONDecodeError:
+                events = None
+            if not (isinstance(events, list) and all(isinstance(e, str) for e in events)):
+                findings.append(
+                    f"{relative} passes the Slack reporter `events: {raw!r}`, which is not a JSON "
+                    f"list of event names such as '[\"schedule\", \"push\", \"release\"]'"
+                )
+                continue
+            for name in names:
+                reported.setdefault(name, set()).update(events)
+
+    named = set()
+    for relative, document in documents:
+        if relative in watchers:
+            continue
+        name = document.get("name")
+        if isinstance(name, str):
+            named.add(name)
+        unattended = workflow_triggers(relative, document) & set(UNATTENDED)
+        if not unattended:
+            continue
+        if not isinstance(name, str) or not name:
+            findings.append(
+                f"{relative} runs on {', '.join(sorted(unattended))} but has no `name:`, which a "
+                f"watcher's `workflows:` list matches on"
+            )
+            continue
+        missing = unattended - reported.get(name, set())
+        if missing:
+            where = " or ".join(str(w) for w in watchers) if watchers else "a watcher workflow"
+            findings.append(
+                f"{relative} ({name!r}) runs on {', '.join(sorted(missing))} unattended, and "
+                f"{where} does not report its failures there: list it in `workflows:` and those "
+                f"triggers in `events:`"
+            )
+    for name in sorted(set(reported) - named):
+        findings.append(
+            f"a watcher lists {name!r}, which is the `name:` of no workflow here, so it reports "
+            f"nothing: remove it, or follow the renamed workflow"
+        )
+    return findings
+
+
+def check_unattended_runs_report_failures(root, tracked, files):
+    """Every workflow that runs with nobody watching has its failures posted to Slack.
+
+    A run started by a schedule, a push or a release has no pull request to show its failure
+    on, so a failure is one red entry in a list nobody opens.  Each such workflow must be named
+    in a watcher - a workflow triggered by `workflow_run` that calls the shared Slack reporter -
+    with each of its unattended triggers among the `events` the watcher reports.  A name in a
+    watcher's list that no workflow has is reported too, because GitHub matches on the name and
+    a rename leaves the list reporting nothing.
+
+    Args:
+        root (pathlib.Path): repository root.
+        tracked (list): every tracked path, unfiltered.
+        files (list): the searchable-text subset.
+
+    Returns:
+        list: The findings.
+
+    Raises:
+        CannotEvaluate: A workflow could not be read or parsed, via workflow_documents, or its
+            `on:` could not be read.
+    """
+    return unattended_run_findings(workflow_documents(root, tracked))
 
 
 # Markdown links plus backtick-quoted paths, since a router routes both ways.
@@ -669,6 +832,7 @@ CHECKS = (
     ("the scan is real", check_the_scan_is_real),
     ("no internal references in a public repository", check_no_internal_references),
     ("every CI job is bounded", check_ci_jobs_are_bounded),
+    ("unattended runs report their failures", check_unattended_runs_report_failures),
     ("the instruction layer is intact", check_the_instruction_layer),
     ("the detail layer and the router agree", check_the_detail_layer_routing),
 )

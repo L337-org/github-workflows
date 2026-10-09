@@ -1,18 +1,25 @@
-name: 'Report a failed scheduled run to Slack'
+name: 'Report a failed run to Slack'
 
 # Called from a repository's watcher workflow, which is started by `workflow_run` when one of the
-# workflows it names completes.  A failed scheduled run is otherwise one red entry in a list
-# nobody opens; this posts it to the channel behind `SLACK_WEBHOOK` instead.
+# workflows it names completes.  A run nobody is watching - started by a schedule, a push to the
+# default branch or a release - that fails is otherwise one red entry in a list nobody opens;
+# this posts it to the channel behind `SLACK_WEBHOOK` instead.
 #
-# Only scheduled runs are reported: a pull request or a push has a person watching it already,
-# and reporting those would bury the scheduled failures this exists for.  Every conclusion but
-# success, skipped and neutral is reported, so a conclusion nobody anticipated is posted rather
-# than passed over.  The filter is here, not in each caller, so no caller can get it wrong.
+# The caller says which triggers to report with `events`.  A push is reported only on the
+# default branch, because a push to any other branch has its pusher watching.  Every conclusion
+# but success, skipped and neutral is reported, so a conclusion nobody anticipated is posted
+# rather than passed over.  The filters are here, not in each caller, so no caller can get them
+# wrong.
 #
 # A post Slack does not accept fails this job, so a broken webhook is a red run of the watcher
 # rather than a failure that silently reached nobody.
 on:
   workflow_call:
+    inputs:
+      events:
+        description: 'The triggers whose failed runs are reported, as a JSON list of event names, such as `["schedule", "push", "release"]`.  `pull_request` is accepted but posts every red push to every pull request.'
+        type: string
+        required: true
     secrets:
       SLACK_WEBHOOK:
         description: 'A Slack incoming webhook URL, which posts to the one channel it was issued for.  Not required, so that a missing secret fails with a message naming it rather than GitHub refusing the call.'
@@ -24,7 +31,9 @@ jobs:
     # fails in its first step instead of being skipped in silence.
     if: >-
       github.event_name != 'workflow_run' ||
-      (github.event.workflow_run.event == 'schedule' &&
+      (contains(fromJSON(inputs.events), github.event.workflow_run.event) &&
+       (github.event.workflow_run.event != 'push' ||
+        github.event.workflow_run.head_branch == github.event.repository.default_branch) &&
        !contains(fromJSON('["success", "skipped", "neutral"]'), github.event.workflow_run.conclusion))
     runs-on: [ubuntu-latest]
     name: Report the failure to Slack
@@ -47,6 +56,7 @@ jobs:
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           SHA: ${{ github.event.workflow_run.head_sha }}
+          TRIGGER: ${{ github.event.workflow_run.event }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" != workflow_run ]; then
@@ -70,7 +80,7 @@ jobs:
 
           # Slack reads &, < and > as markup in message text.
           escape() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' <<<"$1"; }
-          text="Scheduled run failed in $(escape "$REPO"): *$(escape "$WORKFLOW")* ended \`$(escape "$CONCLUSION")\`.
+          text="Failed in $(escape "$REPO"): *$(escape "$WORKFLOW")*, started by \`$(escape "$TRIGGER")\`, ended \`$(escape "$CONCLUSION")\`.
           Jobs: $(escape "$jobs")
           <$RUN_URL|Run $RUN_NUMBER, attempt $RUN_ATTEMPT> on \`$(escape "$BRANCH")\` at \`${SHA:0:12}\`"
 
