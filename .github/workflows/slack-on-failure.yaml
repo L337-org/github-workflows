@@ -12,8 +12,9 @@ name: 'Report a failed run to Slack'
 # nobody anticipated is posted rather than passed over.  The filters are here, not in each
 # caller, so no caller can get them wrong.
 #
-# A post Slack does not accept fails this job, so a broken webhook is a red run of the watcher
-# rather than a failure that silently reached nobody.
+# A post Slack does not accept fails this job, with Slack's answer in the error.  Nothing
+# reports the watcher's own run, so a webhook that stops working is noticed only by the absence
+# of posts: an accepted limitation (README.md).
 on:
   workflow_call:
     inputs:

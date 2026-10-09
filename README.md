@@ -149,9 +149,9 @@ jobs:
   secret, a webhook Slack refuses, or Slack unreachable after retries.  A transient refusal is
   retried, which can post the same failure twice.  **Accepted limitation:** the watcher's run is
   itself a run nobody is watching, and nothing reports it, so a webhook that stops working is
-  noticed only by the absence of posts.  Filing an issue instead was considered: in the failing
-  repository it scatters them, and in this one it needs either a credential that can write
-  across repositories or a scheduled sweep of every repository's watcher runs.
+  noticed only by the absence of posts.  Filing an issue instead would scatter them across
+  repositories if filed in the failing one, and if filed here would need either a credential
+  that can write across repositories or a scheduled sweep of every repository's watcher runs.
 - **The watcher only fires from the default branch**, where GitHub reads `workflow_run`
   triggers.  So a change to it is tested only once merged.
 - **The caller must grant** `actions: read` and `contents: read`, as the example does, or
