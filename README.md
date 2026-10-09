@@ -122,7 +122,9 @@ jobs:
 
 - **What is reported.**  A run of a listed workflow started by one of the `events`, with any
   conclusion but success, skipped or neutral, so a cancelled or timed-out run is posted as well
-  as a failed one.  A push is reported only on the default branch: a push to another branch has
+  as a failed one.  A cancelled run that a newer run of the same workflow on the same branch has
+  replaced, as `cancel-in-progress` does when two merges land together, is not posted: the newer
+  run is reported if it fails.  A push is reported only on the default branch: a push to another branch has
   its pusher watching.  A pull request's run is watched by its author and a manual run by
   whoever started it, so neither belongs in `events`.  The post names the repository, the
   workflow, its trigger, its conclusion and the jobs that did not succeed, and links the run.

@@ -57,12 +57,29 @@ jobs:
           BRANCH: ${{ github.event.workflow_run.head_branch }}
           SHA: ${{ github.event.workflow_run.head_sha }}
           TRIGGER: ${{ github.event.workflow_run.event }}
+          WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
         run: |
           set -euo pipefail
           if [ "$EVENT_NAME" != workflow_run ]; then
             echo "::error::This workflow reports a run that \`workflow_run\` names, and was called from a \`$EVENT_NAME\` event.  Call it from a workflow triggered by \`workflow_run\`." >&2
             exit 1
           fi
+          # A run cancelled because a newer one replaced it - a concurrency group with
+          # `cancel-in-progress`, when two merges land close together - is not a failure: the
+          # newer run is reported if it fails.  A run cancelled by its timeout has no newer run,
+          # so it is still posted.  If the newer runs cannot be listed, the post goes anyway.
+          if [ "$CONCLUSION" = cancelled ]; then
+            if newest=$(gh api "repos/$REPO/actions/workflows/$WORKFLOW_ID/runs?branch=$(jq -rn --arg b "$BRANCH" '$b|@uri')&event=$TRIGGER&per_page=1" \
+                          --jq '.workflow_runs[0].run_number // empty' 2>&1); then
+              if [ -n "$newest" ] && [ "$newest" -gt "$RUN_NUMBER" ]; then
+                echo "::notice::Not posted: run $RUN_NUMBER of $WORKFLOW was cancelled and run $newest on $BRANCH has replaced it."
+                exit 0
+              fi
+            else
+              echo "::warning::Could not tell whether cancelled run $RUN_ID was replaced by a newer one, so it is posted: $newest"
+            fi
+          fi
+
           if [ -z "$SLACK_WEBHOOK" ]; then
             echo "::error::No SLACK_WEBHOOK secret reached this workflow, so the failure of $WORKFLOW (run $RUN_URL) was not posted.  Set the secret on the repository or the organisation, and pass it in the caller's \`secrets:\`." >&2
             exit 1
