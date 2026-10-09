@@ -1,8 +1,7 @@
 name: 'Report a failed run to Slack'
 
 # Called from a repository's watcher workflow, which is started by `workflow_run` when one of the
-# workflows it names completes.  A run nobody is watching - started by a schedule, a push to the
-# default branch or a release - that fails is otherwise one red entry in a list nobody opens;
+# workflows it names completes.  A failed run is otherwise one red entry in a list nobody opens;
 # this posts it to the channel behind `SLACK_WEBHOOK` instead.
 #
 # The caller says which triggers to report with `events`.  A push is reported on the default
@@ -12,13 +11,14 @@ name: 'Report a failed run to Slack'
 # nobody anticipated is posted rather than passed over.  The filters are here, not in each
 # caller, so no caller can get them wrong.
 #
-# A post Slack does not accept fails this job, so a broken webhook is a red run of the watcher
-# rather than a failure that silently reached nobody.
+# A post Slack does not accept fails this job, with Slack's answer in the error.  Nothing
+# reports the watcher's own run, so a webhook that stops working is noticed only by the absence
+# of posts: an accepted limitation (README.md).
 on:
   workflow_call:
     inputs:
       events:
-        description: 'The triggers whose failed runs are reported, as a JSON list of event names, such as `["schedule", "push", "release"]`.  `pull_request` is accepted but posts every red push to every pull request.'
+        description: 'The triggers whose failed runs are reported, as a JSON list of event names, such as `["schedule", "push", "release", "pull_request"]`.  A manual run, `workflow_dispatch`, is best left out, because whoever started it is watching.'
         type: string
         required: true
     secrets:
