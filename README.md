@@ -9,7 +9,7 @@ the bumps.
 | `actions/repo-hygiene` | Composite action: the conventions every repository shares - no internal references, every CI job bounded, every failed run reported, the instruction layer intact, the detail layer routed. | a step, after `actions/checkout` |
 | `actions/action-pins` | Composite action: every `uses:` names a 40-hex commit SHA. | a step, after `actions/checkout` |
 | `.github/workflows/claude-review.yaml` | Reusable workflow: a code review by Claude, full on the first round and a delta of the new commits after that. | a job with `uses:` |
-| `.github/workflows/slack-on-failure.yaml` | Reusable workflow: posts a failed run nobody was watching to Slack, naming the workflow and its failed jobs and linking the run. | a job with `uses:`, in a workflow triggered by `workflow_run` |
+| `.github/workflows/slack-on-failure.yaml` | Reusable workflow: posts a failed run to Slack, naming the workflow and its failed jobs and linking the run. | a job with `uses:`, in a workflow triggered by `workflow_run` |
 
 ## Using them
 
@@ -133,10 +133,11 @@ jobs:
   with any conclusion but success, skipped or neutral, so a cancelled or timed-out run is
   posted as well as a failed one.  A push is reported on the default branch and on a tag; a
   push to another branch has its pusher watching.  A manual run is watched by whoever started
-  it, so it does not belong in `events`.  A pull request's run is posted whichever repository
-  its branch is in, so a fork's failing checks post too, once GitHub has let them run.  The
-  post names the repository, the workflow, its trigger, its conclusion and the jobs that did not
-  succeed, and links the run.
+  it, so it does not belong in `events`.  A pull request from a fork is not posted: its run
+  uses the fork's own workflow file, so its author writes the job names and branch a post
+  would carry, and could put text of their choosing in the channel.  Its failure still shows
+  on the pull request.  The post names the repository, the workflow, its trigger, its
+  conclusion and the jobs that did not succeed, and links the run.
 - **A cancelled run that a newer one replaced is not posted**, as when `cancel-in-progress`
   cancels the first of two merges landing together: the newer run is reported if it fails.
   **Accepted limitation:** a run cancelled by its timeout while a newer run of the same workflow

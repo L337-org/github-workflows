@@ -567,7 +567,7 @@ def reported_run_findings(documents):
             if not (isinstance(events, list) and all(isinstance(e, str) for e in events)):
                 findings.append(
                     f"{relative} passes the Slack reporter `events: {raw!r}`, which is not a JSON "
-                    f"list of event names such as '[\"schedule\", \"push\", \"release\"]'"
+                    f"list of event names such as '[\"schedule\", \"push\", \"release\", \"pull_request\"]'"
                 )
                 continue
             for name in names:
