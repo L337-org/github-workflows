@@ -106,10 +106,10 @@ MAX_TIMEOUT_MINUTES = 60
 
 BINARY_SUFFIXES = (".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".gz", ".zip", ".deb", ".whl")
 
-# --- unattended runs report their failures --------------------------------------------------
-# The triggers of a run nobody is watching.  A pull request's run is watched by its author, and
-# a manual run by whoever started it.
-UNATTENDED = ("schedule", "push", "release")
+# --- failed runs are reported -----------------------------------------------------------------
+# The triggers whose failed runs are posted to Slack.  A manual run is left out, because whoever
+# started it is watching.
+REPORTED = ("schedule", "push", "release", "pull_request")
 
 # A call to the shared Slack reporter, from another repository or from this one.
 REPORTER = re.compile(
@@ -522,8 +522,8 @@ def workflow_triggers(relative, document):
     raise CannotEvaluate(f"{relative} has no `on:` this check can read (got {on!r})")
 
 
-def unattended_run_findings(documents):
-    """The findings of check_unattended_runs_report_failures, over parsed workflows.
+def reported_run_findings(documents):
+    """The findings of check_failed_runs_are_reported, over parsed workflows.
 
     Args:
         documents (list): `(repo-relative path, document)` pairs, as workflow_documents returns.
@@ -567,7 +567,7 @@ def unattended_run_findings(documents):
             if not (isinstance(events, list) and all(isinstance(e, str) for e in events)):
                 findings.append(
                     f"{relative} passes the Slack reporter `events: {raw!r}`, which is not a JSON "
-                    f"list of event names such as '[\"schedule\", \"push\", \"release\"]'"
+                    f"list of event names such as '[\"schedule\", \"push\", \"release\", \"pull_request\"]'"
                 )
                 continue
             for name in names:
@@ -580,22 +580,22 @@ def unattended_run_findings(documents):
         name = document.get("name")
         if isinstance(name, str):
             named.add(name)
-        unattended = workflow_triggers(relative, document) & set(UNATTENDED)
-        if not unattended:
+        triggers = workflow_triggers(relative, document) & set(REPORTED)
+        if not triggers:
             continue
         if not isinstance(name, str) or not name:
             findings.append(
-                f"{relative} runs on {', '.join(sorted(unattended))} but has no `name:`, which a "
+                f"{relative} runs on {', '.join(sorted(triggers))} but has no `name:`, which a "
                 f"watcher's `workflows:` list matches on"
             )
             continue
-        missing = unattended - reported.get(name, set())
+        missing = triggers - reported.get(name, set())
         if missing:
             where = " or ".join(str(w) for w in watchers) if watchers else "a watcher workflow"
             findings.append(
-                f"{relative} ({name!r}) runs on {', '.join(sorted(missing))} unattended, and "
-                f"{where} does not report its failures there: list it in `workflows:` and those "
-                f"triggers in `events:`"
+                f"{relative} ({name!r}) runs on {', '.join(sorted(missing))}, and {where} does "
+                f"not report its failures there: list it in `workflows:` and those triggers in "
+                f"`events:`"
             )
     for name in sorted(set(reported) - named):
         findings.append(
@@ -605,13 +605,12 @@ def unattended_run_findings(documents):
     return findings
 
 
-def check_unattended_runs_report_failures(root, tracked, files):
-    """Every workflow that runs with nobody watching has its failures posted to Slack.
+def check_failed_runs_are_reported(root, tracked, files):
+    """Every workflow started by a schedule, a push, a release or a pull request reports failures.
 
-    A run started by a schedule, a push or a release has no pull request to show its failure
-    on, so a failure is one red entry in a list nobody opens.  Each such workflow must be named
-    in a watcher - a workflow triggered by `workflow_run` that calls the shared Slack reporter -
-    with each of its unattended triggers among the `events` the watcher reports.  A name in a
+    A failed run is otherwise one red entry in a list nobody opens, so each such workflow must
+    be named in a watcher - a workflow triggered by `workflow_run` that calls the shared Slack
+    reporter - with each of those triggers among the `events` the watcher reports.  A name in a
     watcher's list that no workflow has is reported too, because GitHub matches on the name and
     a rename leaves the list reporting nothing.
 
@@ -627,7 +626,7 @@ def check_unattended_runs_report_failures(root, tracked, files):
         CannotEvaluate: A workflow could not be read or parsed, via workflow_documents, or its
             `on:` could not be read.
     """
-    return unattended_run_findings(workflow_documents(root, tracked))
+    return reported_run_findings(workflow_documents(root, tracked))
 
 
 # Markdown links plus backtick-quoted paths, since a router routes both ways.
@@ -833,7 +832,7 @@ CHECKS = (
     ("the scan is real", check_the_scan_is_real),
     ("no internal references in a public repository", check_no_internal_references),
     ("every CI job is bounded", check_ci_jobs_are_bounded),
-    ("unattended runs report their failures", check_unattended_runs_report_failures),
+    ("failed runs are reported", check_failed_runs_are_reported),
     ("the instruction layer is intact", check_the_instruction_layer),
     ("the detail layer and the router agree", check_the_detail_layer_routing),
 )

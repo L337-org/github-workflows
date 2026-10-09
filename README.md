@@ -6,10 +6,10 @@ the bumps.
 
 | Path | What it is | Call it as |
 |---|---|---|
-| `actions/repo-hygiene` | Composite action: the conventions every repository shares - no internal references, every CI job bounded, every unattended run reporting its failures, the instruction layer intact, the detail layer routed. | a step, after `actions/checkout` |
+| `actions/repo-hygiene` | Composite action: the conventions every repository shares - no internal references, every CI job bounded, every failed run reported, the instruction layer intact, the detail layer routed. | a step, after `actions/checkout` |
 | `actions/action-pins` | Composite action: every `uses:` names a 40-hex commit SHA. | a step, after `actions/checkout` |
 | `.github/workflows/claude-review.yaml` | Reusable workflow: a code review by Claude, full on the first round and a delta of the new commits after that. | a job with `uses:` |
-| `.github/workflows/slack-on-failure.yaml` | Reusable workflow: posts a failed run nobody was watching to Slack, naming the workflow and its failed jobs and linking the run. | a job with `uses:`, in a workflow triggered by `workflow_run` |
+| `.github/workflows/slack-on-failure.yaml` | Reusable workflow: posts a failed run to Slack, naming the workflow and its failed jobs and linking the run. | a job with `uses:`, in a workflow triggered by `workflow_run` |
 
 ## Using them
 
@@ -101,9 +101,10 @@ inputs are at the top of `.github/workflows/claude-review.yaml`.
 
 ## Reporting failed runs to Slack
 
-A run started by a schedule, a push or a release has nobody watching it, so its failure is
-posted to Slack instead.  Each repository has one watcher workflow, `report-failures.yaml`,
-naming the workflows to report; adding such a workflow means adding its `name:` there.
+A failed run is otherwise one red entry in a list nobody opens, so a failure started by a
+schedule, a push, a release or a pull request is posted to Slack instead.  Each repository has
+one watcher workflow, `report-failures.yaml`, naming the workflows to report; adding such a
+workflow means adding its `name:` there.
 
 ```yaml
 name: 'Report failures'
@@ -111,6 +112,7 @@ on:
   workflow_run:
     workflows:
       - 'Check inbound changes'
+      - 'Code review'
       - 'Release'
       - 'Nightly fuzzing'
     types: [completed]
@@ -122,7 +124,7 @@ jobs:
     name: Report to Slack
     uses: L337-org/github-workflows/.github/workflows/slack-on-failure.yaml@<sha> # vX.Y.Z
     with:
-      events: '["schedule", "push", "release"]'
+      events: '["schedule", "push", "release", "pull_request"]'
     secrets:
       SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
 ```
@@ -130,25 +132,30 @@ jobs:
 - **What is reported.**  A completed run of a listed workflow started by one of the `events`,
   with any conclusion but success, skipped or neutral, so a cancelled or timed-out run is
   posted as well as a failed one.  A push is reported on the default branch and on a tag; a
-  push to another branch has its pusher watching.  A pull request's run is watched by its
-  author and a manual run by whoever started it, so neither belongs in `events`.  The post
-  names the repository, the workflow, its trigger, its conclusion and the jobs that did not
-  succeed, and links the run.
+  push to another branch has its pusher watching.  A manual run is watched by whoever started
+  it, so it does not belong in `events`.  A pull request from a fork is not posted: its run
+  uses the fork's own workflow file, so its author writes the job names and branch a post
+  would carry, and could put text of their choosing in the channel.  Its failure still shows
+  on the pull request.  The post names the repository, the workflow, its trigger, its
+  conclusion and the jobs that did not succeed, and links the run.
 - **A cancelled run that a newer one replaced is not posted**, as when `cancel-in-progress`
   cancels the first of two merges landing together: the newer run is reported if it fails.
   **Accepted limitation:** a run cancelled by its timeout while a newer run of the same workflow
   was already queued looks the same, so it is not posted either.
-- **The hygiene check holds the list.**  It fails on a workflow triggered by `schedule`, `push`
-  or `release` that no watcher reports for that trigger, on one with no `name:`, and on a
-  listed name no workflow has, since GitHub matches on the name and a rename leaves the list
-  reporting nothing.
+- **The hygiene check holds the list.**  It fails on a workflow triggered by `schedule`, `push`,
+  `release` or `pull_request` that no watcher reports for that trigger, on one with no `name:`,
+  and on a listed name no workflow has, since GitHub matches on the name and a rename leaves the
+  list reporting nothing.
 - **Where it goes.**  To the channel of the incoming webhook in the `SLACK_WEBHOOK` secret.  A
   secret set on the organisation is every repository's default, and a repository secret of the
   same name overrides it.  An incoming webhook posts to one channel and can do nothing else.
 - **A post that fails, fails the watcher's run**, with Slack's answer in the error: a missing
-  secret, a webhook Slack refuses, or Slack unreachable after retries.  So a broken webhook shows
-  as a red watcher run rather than a failure that reached nobody.  A transient refusal is
-  retried, which can post the same failure twice.
+  secret, a webhook Slack refuses, or Slack unreachable after retries.  A transient refusal is
+  retried, which can post the same failure twice.  **Accepted limitation:** the watcher's run is
+  itself a run nobody is watching, and nothing reports it, so a webhook that stops working is
+  noticed only by the absence of posts.  Filing an issue instead would scatter them across
+  repositories if filed in the failing one, and if filed here would need either a credential
+  that can write across repositories or a scheduled sweep of every repository's watcher runs.
 - **The watcher only fires from the default branch**, where GitHub reads `workflow_run`
   triggers.  So a change to it is tested only once merged.
 - **The caller must grant** `actions: read` and `contents: read`, as the example does, or
