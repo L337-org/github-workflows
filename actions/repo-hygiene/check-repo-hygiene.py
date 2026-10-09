@@ -558,7 +558,8 @@ def unattended_run_findings(documents):
             )
             continue
         for body in calls:
-            raw = (body.get("with") or {}).get("events") if isinstance(body.get("with") or {}, dict) else None
+            given = body.get("with") or {}
+            raw = given.get("events") if isinstance(given, dict) else None
             try:
                 events = json.loads(raw) if isinstance(raw, str) else None
             except json.JSONDecodeError:

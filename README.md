@@ -110,6 +110,7 @@ on:
     types: [completed]
 permissions:
   actions: read
+  contents: read
 jobs:
   slack:
     name: Report to Slack
@@ -120,33 +121,32 @@ jobs:
       SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
 ```
 
-- **What is reported.**  A run of a listed workflow started by one of the `events`, with any
-  conclusion but success, skipped or neutral, so a cancelled or timed-out run is posted as well
-  as a failed one.  A cancelled run that a newer run of the same workflow on the same branch has
-  replaced, as `cancel-in-progress` does when two merges land together, is not posted: the newer
-  run is reported if it fails.  A push is reported only on the default branch: a push to another branch has
-  its pusher watching.  A pull request's run is watched by its author and a manual run by
-  whoever started it, so neither belongs in `events`.  The post names the repository, the
-  workflow, its trigger, its conclusion and the jobs that did not succeed, and links the run.
+- **What is reported.**  A completed run of a listed workflow started by one of the `events`,
+  with any conclusion but success, skipped or neutral, so a cancelled or timed-out run is
+  posted as well as a failed one.  A push is reported on the default branch and on a tag; a
+  push to another branch has its pusher watching.  A pull request's run is watched by its
+  author and a manual run by whoever started it, so neither belongs in `events`.  The post
+  names the repository, the workflow, its trigger, its conclusion and the jobs that did not
+  succeed, and links the run.
+- **A cancelled run that a newer one replaced is not posted**, as when `cancel-in-progress`
+  cancels the first of two merges landing together: the newer run is reported if it fails.
+  **Accepted limitation:** a run cancelled by its timeout while a newer run of the same workflow
+  was already queued looks the same, so it is not posted either.
 - **The hygiene check holds the list.**  It fails on a workflow triggered by `schedule`, `push`
   or `release` that no watcher reports for that trigger, on one with no `name:`, and on a
   listed name no workflow has, since GitHub matches on the name and a rename leaves the list
   reporting nothing.
-- **Where it goes.**  To the channel of the incoming webhook in the `SLACK_WEBHOOK` secret.  The
-  organisation's secret posts to the organisation's channel, and a repository with a channel of
-  its own sets a repository secret of the same name, which GitHub uses in preference.  An
-  incoming webhook posts to one channel and can do nothing else.
+- **Where it goes.**  To the channel of the incoming webhook in the `SLACK_WEBHOOK` secret.  A
+  secret set on the organisation is every repository's default, and a repository secret of the
+  same name overrides it.  An incoming webhook posts to one channel and can do nothing else.
 - **A post that fails, fails the watcher's run**, with Slack's answer in the error: a missing
   secret, a webhook Slack refuses, or Slack unreachable after retries.  So a broken webhook shows
   as a red watcher run rather than a failure that reached nobody.  A transient refusal is
   retried, which can post the same failure twice.
 - **The watcher only fires from the default branch**, where GitHub reads `workflow_run`
   triggers.  So a change to it is tested only once merged.
-- **The caller needs** `actions: read`, to list the failed jobs; without it the post still
-  goes, saying the jobs could not be listed.
-
-This repository's own watcher calls the workflow by local path, so it always runs the version
-on `main`.
+- **The caller must grant** `actions: read` and `contents: read`, as the example does, or
+  GitHub refuses to start the reporter's job and nothing is posted.
 
 ## Running the hygiene check locally
 
@@ -174,6 +174,6 @@ Exit status is 0 clean, 1 on findings, 2 when the scan could not be trusted.
 Everything here runs in other repositories' CI, so a change reaches them only when each one
 bumps its pin.  This repository's own CI runs the action-pins action from the commit under
 review, lints every workflow and action with actionlint, and reviews each pull request with the
-Claude review at the pull request's own commit, so a change to the review reviews itself.  The
+pull request's own version of the Claude review, so a change to the review reviews itself.  The
 hygiene check does not run on this repository: it expects the instruction layer and detail layer
 of a product repository, which this one does not have.

@@ -9,8 +9,9 @@ on:
     types: [completed]
 
 permissions:
-  # Read by the reporter to name the jobs that failed.
+  # Both read by the reporter, which GitHub refuses to start without them.
   actions: read
+  contents: read
 
 jobs:
   slack:
