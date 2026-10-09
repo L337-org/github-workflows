@@ -1,0 +1,142 @@
+name: 'Report a failed run to Slack'
+
+# Called from a repository's watcher workflow, which is started by `workflow_run` when one of the
+# workflows it names completes.  A run nobody is watching - started by a schedule, a push to the
+# default branch or a release - that fails is otherwise one red entry in a list nobody opens;
+# this posts it to the channel behind `SLACK_WEBHOOK` instead.
+#
+# The caller says which triggers to report with `events`.  A push is reported on the default
+# branch and on a tag, which is how a release is often started; a push to any other branch has
+# its pusher watching.  Only a completed run is reported, whatever `types:` the caller gives
+# `workflow_run`, and with every conclusion but success, skipped and neutral, so a conclusion
+# nobody anticipated is posted rather than passed over.  The filters are here, not in each
+# caller, so no caller can get them wrong.
+#
+# A post Slack does not accept fails this job, so a broken webhook is a red run of the watcher
+# rather than a failure that silently reached nobody.
+on:
+  workflow_call:
+    inputs:
+      events:
+        description: 'The triggers whose failed runs are reported, as a JSON list of event names, such as `["schedule", "push", "release"]`.  `pull_request` is accepted but posts every red push to every pull request.'
+        type: string
+        required: true
+    secrets:
+      SLACK_WEBHOOK:
+        description: 'A Slack incoming webhook URL, which posts to the one channel it was issued for.  Not required, so that a missing secret fails with a message naming it rather than GitHub refusing the call.'
+        required: false
+
+jobs:
+  report:
+    # Also runs when called from anything but `workflow_run`, so that a misconfigured caller
+    # fails in its first step instead of being skipped in silence.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.action == 'completed' &&
+       contains(fromJSON(inputs.events), github.event.workflow_run.event) &&
+       !contains(fromJSON('["success", "skipped", "neutral"]'), github.event.workflow_run.conclusion))
+    runs-on: [ubuntu-latest]
+    name: Report the failure to Slack
+    timeout-minutes: 5
+    # The caller must grant both, or GitHub refuses to start this job.
+    permissions:
+      # To name the jobs that failed, and to find a newer run that replaced a cancelled one.
+      actions: read
+      # To tell a tag from a branch.
+      contents: read
+    steps:
+      - name: Post the failed run
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          WORKFLOW: ${{ github.event.workflow_run.name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+          TRIGGER: ${{ github.event.workflow_run.event }}
+          WORKFLOW_ID: ${{ github.event.workflow_run.workflow_id }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != workflow_run ]; then
+            echo "::error::This workflow reports a run that \`workflow_run\` names, and was called from a \`$EVENT_NAME\` event.  Call it from a workflow triggered by \`workflow_run\`." >&2
+            exit 1
+          fi
+          # For a run a push started, `head_branch` is the branch or, for a tag, the tag's name.
+          # A push to the default branch or of a tag is reported; a push to another branch has
+          # its pusher watching.  If the tags cannot be listed, the post goes anyway.  A branch
+          # with the same name as a tag cannot be told from it here, so its push is posted.
+          if [ "$TRIGGER" = push ] && [ "$BRANCH" != "$DEFAULT_BRANCH" ]; then
+            if refs=$(gh api "repos/$REPO/git/matching-refs/tags/$(jq -rn --arg b "$BRANCH" '$b|@uri')" --jq '.[].ref' 2>&1); then
+              if ! grep -Fxq "refs/tags/$BRANCH" <<<"$refs"; then
+                echo "::notice::Not posted: run $RUN_NUMBER of $WORKFLOW was a push to $BRANCH, which is neither the default branch nor a tag."
+                exit 0
+              fi
+            else
+              echo "::warning::Could not tell whether $BRANCH is a tag, so the failed push is posted: $refs"
+            fi
+          fi
+
+          # A run cancelled because a newer one replaced it - a concurrency group with
+          # `cancel-in-progress`, when two merges land close together - is not a failure: the
+          # newer run is reported if it fails.  A run cancelled by its timeout while no newer run
+          # exists is posted.  One cancelled by its timeout while a newer run was already queued
+          # cannot be told from a replaced one, so it is not posted: an accepted limitation.  If
+          # the newer runs cannot be listed, the post goes anyway.
+          if [ "$CONCLUSION" = cancelled ]; then
+            if newest=$(gh api "repos/$REPO/actions/workflows/$WORKFLOW_ID/runs?branch=$(jq -rn --arg b "$BRANCH" '$b|@uri')&event=$TRIGGER&per_page=1" \
+                          --jq '.workflow_runs[0].run_number // empty' 2>&1); then
+              if [ -n "$newest" ] && [ "$newest" -gt "$RUN_NUMBER" ]; then
+                echo "::notice::Not posted: run $RUN_NUMBER of $WORKFLOW was cancelled and run $newest on $BRANCH has replaced it."
+                exit 0
+              fi
+            else
+              echo "::warning::Could not tell whether cancelled run $RUN_ID was replaced by a newer one, so it is posted: $newest"
+            fi
+          fi
+
+          if [ -z "$SLACK_WEBHOOK" ]; then
+            echo "::error::No SLACK_WEBHOOK secret reached this workflow, so the failure of $WORKFLOW (run $RUN_URL) was not posted.  Set the secret on the repository or the organisation, and pass it in the caller's \`secrets:\`." >&2
+            exit 1
+          fi
+
+          # Naming the failed jobs saves opening the run to find them, but the post does not
+          # depend on it: if they cannot be listed, the post says so and goes anyway.
+          if jobs=$(gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100" \
+                      --jq '[.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | "\(.name) (\(.conclusion))"] | join(", ")' 2>&1); then
+            jobs=${jobs:-none listed}
+          else
+            echo "::warning::Could not list the jobs of run $RUN_ID: $jobs"
+            jobs="could not be listed: $jobs"
+          fi
+
+          # Slack reads &, < and > as markup in message text.
+          escape() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' <<<"$1"; }
+          text="Failed in $(escape "$REPO"): *$(escape "$WORKFLOW")*, started by \`$(escape "$TRIGGER")\`, ended \`$(escape "$CONCLUSION")\`.
+          Jobs: $(escape "$jobs")
+          <$RUN_URL|Run $RUN_NUMBER, attempt $RUN_ATTEMPT> on \`$(escape "$BRANCH")\` at \`${SHA:0:12}\`"
+
+          # The body goes to a file because a retry truncates a file, where to standard output it
+          # would follow the refused attempt's body.
+          body_file=$(mktemp)
+          status=$(jq -n --arg text "$text" '{text: $text}' \
+            | curl --silent --show-error --max-time 30 --retry 3 \
+                --header 'Content-Type: application/json' --data @- \
+                --output "$body_file" --write-out '%{http_code}' "$SLACK_WEBHOOK") || {
+            echo "::error::Posting the failure of $WORKFLOW (run $RUN_URL) to Slack failed: curl could not complete the request." >&2
+            exit 1
+          }
+          body=$(cat "$body_file")
+          # Slack answers a post it accepts with 200 and the body `ok`, and anything else with an
+          # error code in the body, such as `invalid_token` or `channel_not_found`.
+          if [ "$status" != 200 ] || [ "$body" != ok ]; then
+            echo "::error::Slack refused the post about $WORKFLOW (run $RUN_URL): HTTP $status, $body" >&2
+            exit 1
+          fi
+          echo "Posted the failure of $WORKFLOW (run $RUN_URL) to Slack."

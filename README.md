@@ -6,9 +6,10 @@ the bumps.
 
 | Path | What it is | Call it as |
 |---|---|---|
-| `actions/repo-hygiene` | Composite action: the conventions every repository shares - no internal references, every CI job bounded, the instruction layer intact, the detail layer routed. | a step, after `actions/checkout` |
+| `actions/repo-hygiene` | Composite action: the conventions every repository shares - no internal references, every CI job bounded, every unattended run reporting its failures, the instruction layer intact, the detail layer routed. | a step, after `actions/checkout` |
 | `actions/action-pins` | Composite action: every `uses:` names a 40-hex commit SHA. | a step, after `actions/checkout` |
 | `.github/workflows/claude-review.yaml` | Reusable workflow: a code review by Claude, full on the first round and a delta of the new commits after that. | a job with `uses:` |
+| `.github/workflows/slack-on-failure.yaml` | Reusable workflow: posts a failed run nobody was watching to Slack, naming the workflow and its failed jobs and linking the run. | a job with `uses:`, in a workflow triggered by `workflow_run` |
 
 ## Using them
 
@@ -77,6 +78,12 @@ inputs are at the top of `.github/workflows/claude-review.yaml`.
   and the range it covers starts at the last commit a posted review recorded, so commits the
   older one would have reviewed are not skipped.  A burst of pushes during a review produces one
   delta review of all of them.
+- **A request by comment reviews the head it was made against.**  The run starts after the
+  comment, so the gate reads when the branch was last pushed from GitHub's activity record,
+  which the pusher cannot set, and refuses the request, with a reply saying to ask again, if
+  that push is at or after the comment or is not of the current head.  The review then checks
+  out the head the gate passed rather than looking it up again.  So nothing pushed after the
+  request is reviewed under the token.
 - **Bot and fork pull requests are skipped.**  GitHub gives no secrets to a run started by
   Dependabot or by a fork pull request, and bot pull requests are reviewed by hand, so a gate job
   skips those runs with a notice instead of failing.  A pull request a bot opened is skipped
@@ -91,6 +98,61 @@ inputs are at the top of `.github/workflows/claude-review.yaml`.
   the next request reviews the same range again.
 - **The caller needs** `contents: read` and `pull-requests: write`, and must pass the secret
   explicitly.
+
+## Reporting failed runs to Slack
+
+A run started by a schedule, a push or a release has nobody watching it, so its failure is
+posted to Slack instead.  Each repository has one watcher workflow, `report-failures.yaml`,
+naming the workflows to report; adding such a workflow means adding its `name:` there.
+
+```yaml
+name: 'Report failures'
+on:
+  workflow_run:
+    workflows:
+      - 'Check inbound changes'
+      - 'Release'
+      - 'Nightly fuzzing'
+    types: [completed]
+permissions:
+  actions: read
+  contents: read
+jobs:
+  slack:
+    name: Report to Slack
+    uses: L337-org/github-workflows/.github/workflows/slack-on-failure.yaml@<sha> # vX.Y.Z
+    with:
+      events: '["schedule", "push", "release"]'
+    secrets:
+      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+```
+
+- **What is reported.**  A completed run of a listed workflow started by one of the `events`,
+  with any conclusion but success, skipped or neutral, so a cancelled or timed-out run is
+  posted as well as a failed one.  A push is reported on the default branch and on a tag; a
+  push to another branch has its pusher watching.  A pull request's run is watched by its
+  author and a manual run by whoever started it, so neither belongs in `events`.  The post
+  names the repository, the workflow, its trigger, its conclusion and the jobs that did not
+  succeed, and links the run.
+- **A cancelled run that a newer one replaced is not posted**, as when `cancel-in-progress`
+  cancels the first of two merges landing together: the newer run is reported if it fails.
+  **Accepted limitation:** a run cancelled by its timeout while a newer run of the same workflow
+  was already queued looks the same, so it is not posted either.
+- **The hygiene check holds the list.**  It fails on a workflow triggered by `schedule`, `push`
+  or `release` that no watcher reports for that trigger, on one with no `name:`, and on a
+  listed name no workflow has, since GitHub matches on the name and a rename leaves the list
+  reporting nothing.
+- **Where it goes.**  To the channel of the incoming webhook in the `SLACK_WEBHOOK` secret.  A
+  secret set on the organisation is every repository's default, and a repository secret of the
+  same name overrides it.  An incoming webhook posts to one channel and can do nothing else.
+- **A post that fails, fails the watcher's run**, with Slack's answer in the error: a missing
+  secret, a webhook Slack refuses, or Slack unreachable after retries.  So a broken webhook shows
+  as a red watcher run rather than a failure that reached nobody.  A transient refusal is
+  retried, which can post the same failure twice.
+- **The watcher only fires from the default branch**, where GitHub reads `workflow_run`
+  triggers.  So a change to it is tested only once merged.
+- **The caller must grant** `actions: read` and `contents: read`, as the example does, or
+  GitHub refuses to start the reporter's job and nothing is posted.
 
 ## Running the hygiene check locally
 
@@ -117,6 +179,7 @@ Exit status is 0 clean, 1 on findings, 2 when the scan could not be trusted.
 
 Everything here runs in other repositories' CI, so a change reaches them only when each one
 bumps its pin.  This repository's own CI runs the action-pins action from the commit under
-review and lints every workflow and action with actionlint.  The hygiene check does not run on
-this repository: it expects the instruction layer and detail layer of a product repository,
-which this one does not have.
+review, lints every workflow and action with actionlint, and reviews each pull request with the
+pull request's own version of the Claude review, so a change to the review reviews itself.  The
+hygiene check does not run on this repository: it expects the instruction layer and detail layer
+of a product repository, which this one does not have.
