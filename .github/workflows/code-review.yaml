@@ -2,10 +2,10 @@ name: 'Code review'
 permissions:
   contents: read
 
-# A caller like any other repository's, except that it calls the review workflow by local path
-# rather than a pinned commit.  On a pull request that runs the version on the pull request's
-# branch, so a change to the review is exercised by reviewing the pull request that makes it;
-# a broken change can review itself badly, which costs little since the review is advisory.
+# Calls the review workflow by local path rather than a pinned commit.  On a pull request that
+# runs the version on the pull request's branch, so a change to the review is exercised by
+# reviewing the pull request that makes it; a broken change can review itself badly, which costs
+# little since the review is advisory.
 # README.md describes the review.
 #
 # - Opening a pull request, and every push to one, asks for a review at the depth the shared

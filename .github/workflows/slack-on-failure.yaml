@@ -70,7 +70,8 @@ jobs:
           fi
           # For a run a push started, `head_branch` is the branch or, for a tag, the tag's name.
           # A push to the default branch or of a tag is reported; a push to another branch has
-          # its pusher watching.  If the tags cannot be listed, the post goes anyway.
+          # its pusher watching.  If the tags cannot be listed, the post goes anyway.  A branch
+          # with the same name as a tag cannot be told from it here, so its push is posted.
           if [ "$TRIGGER" = push ] && [ "$BRANCH" != "$DEFAULT_BRANCH" ]; then
             if refs=$(gh api "repos/$REPO/git/matching-refs/tags/$(jq -rn --arg b "$BRANCH" '$b|@uri')" --jq '.[].ref' 2>&1); then
               if ! grep -Fxq "refs/tags/$BRANCH" <<<"$refs"; then
