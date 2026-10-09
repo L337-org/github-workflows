@@ -173,6 +173,7 @@ Exit status is 0 clean, 1 on findings, 2 when the scan could not be trusted.
 
 Everything here runs in other repositories' CI, so a change reaches them only when each one
 bumps its pin.  This repository's own CI runs the action-pins action from the commit under
-review and lints every workflow and action with actionlint.  The hygiene check does not run on
-this repository: it expects the instruction layer and detail layer of a product repository,
-which this one does not have.
+review, lints every workflow and action with actionlint, and reviews each pull request with the
+Claude review at the pull request's own commit, so a change to the review reviews itself.  The
+hygiene check does not run on this repository: it expects the instruction layer and detail layer
+of a product repository, which this one does not have.
