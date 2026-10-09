@@ -1,0 +1,94 @@
+name: 'Report a failed scheduled run to Slack'
+
+# Called from a repository's watcher workflow, which is started by `workflow_run` when one of the
+# workflows it names completes.  A failed scheduled run is otherwise one red entry in a list
+# nobody opens; this posts it to the channel behind `SLACK_WEBHOOK` instead.
+#
+# Only scheduled runs are reported: a pull request or a push has a person watching it already,
+# and reporting those would bury the scheduled failures this exists for.  Every conclusion but
+# success, skipped and neutral is reported, so a conclusion nobody anticipated is posted rather
+# than passed over.  The filter is here, not in each caller, so no caller can get it wrong.
+#
+# A post Slack does not accept fails this job, so a broken webhook is a red run of the watcher
+# rather than a failure that silently reached nobody.
+on:
+  workflow_call:
+    secrets:
+      SLACK_WEBHOOK:
+        description: 'A Slack incoming webhook URL, which posts to the one channel it was issued for.  Not required, so that a missing secret fails with a message naming it rather than GitHub refusing the call.'
+        required: false
+
+jobs:
+  report:
+    # Also runs when called from anything but `workflow_run`, so that a misconfigured caller
+    # fails in its first step instead of being skipped in silence.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.event == 'schedule' &&
+       !contains(fromJSON('["success", "skipped", "neutral"]'), github.event.workflow_run.conclusion))
+    runs-on: [ubuntu-latest]
+    name: Report the failure to Slack
+    timeout-minutes: 5
+    permissions:
+      # To name the jobs that failed.
+      actions: read
+    steps:
+      - name: Post the failed run
+        env:
+          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          REPO: ${{ github.repository }}
+          WORKFLOW: ${{ github.event.workflow_run.name }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
+          RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+          BRANCH: ${{ github.event.workflow_run.head_branch }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          if [ "$EVENT_NAME" != workflow_run ]; then
+            echo "::error::This workflow reports a run that \`workflow_run\` names, and was called from a \`$EVENT_NAME\` event.  Call it from a workflow triggered by \`workflow_run\`." >&2
+            exit 1
+          fi
+          if [ -z "$SLACK_WEBHOOK" ]; then
+            echo "::error::No SLACK_WEBHOOK secret reached this workflow, so the failure of $WORKFLOW (run $RUN_URL) was not posted.  Set the secret on the repository or the organisation, and pass it in the caller's \`secrets:\`." >&2
+            exit 1
+          fi
+
+          # Naming the failed jobs saves opening the run to find them, but the post does not
+          # depend on it: if they cannot be listed, the post says so and goes anyway.
+          if jobs=$(gh api "repos/$REPO/actions/runs/$RUN_ID/attempts/$RUN_ATTEMPT/jobs?per_page=100" \
+                      --jq '[.jobs[] | select(.conclusion != "success" and .conclusion != "skipped") | "\(.name) (\(.conclusion))"] | join(", ")' 2>&1); then
+            jobs=${jobs:-none listed}
+          else
+            echo "::warning::Could not list the jobs of run $RUN_ID: $jobs"
+            jobs="could not be listed: $jobs"
+          fi
+
+          # Slack reads &, < and > as markup in message text.
+          escape() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' <<<"$1"; }
+          text="Scheduled run failed in $(escape "$REPO"): *$(escape "$WORKFLOW")* ended \`$(escape "$CONCLUSION")\`.
+          Jobs: $(escape "$jobs")
+          <$RUN_URL|Run $RUN_NUMBER, attempt $RUN_ATTEMPT> on \`$(escape "$BRANCH")\` at \`${SHA:0:12}\`"
+
+          # The body goes to a file because a retry truncates a file, where to standard output it
+          # would follow the refused attempt's body.
+          body_file=$(mktemp)
+          status=$(jq -n --arg text "$text" '{text: $text}' \
+            | curl --silent --show-error --max-time 30 --retry 3 \
+                --header 'Content-Type: application/json' --data @- \
+                --output "$body_file" --write-out '%{http_code}' "$SLACK_WEBHOOK") || {
+            echo "::error::Posting the failure of $WORKFLOW (run $RUN_URL) to Slack failed: curl could not complete the request." >&2
+            exit 1
+          }
+          body=$(cat "$body_file")
+          # Slack answers a post it accepts with 200 and the body `ok`, and anything else with an
+          # error code in the body, such as `invalid_token` or `channel_not_found`.
+          if [ "$status" != 200 ] || [ "$body" != ok ]; then
+            echo "::error::Slack refused the post about $WORKFLOW (run $RUN_URL): HTTP $status, $body" >&2
+            exit 1
+          fi
+          echo "Posted the failure of $WORKFLOW (run $RUN_URL) to Slack."

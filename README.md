@@ -9,6 +9,7 @@ the bumps.
 | `actions/repo-hygiene` | Composite action: the conventions every repository shares - no internal references, every CI job bounded, the instruction layer intact, the detail layer routed. | a step, after `actions/checkout` |
 | `actions/action-pins` | Composite action: every `uses:` names a 40-hex commit SHA. | a step, after `actions/checkout` |
 | `.github/workflows/claude-review.yaml` | Reusable workflow: a code review by Claude, full on the first round and a delta of the new commits after that. | a job with `uses:` |
+| `.github/workflows/slack-on-failure.yaml` | Reusable workflow: posts a failed scheduled run to Slack, naming the workflow and its failed jobs and linking the run. | a job with `uses:`, in a workflow triggered by `workflow_run` |
 
 ## Using them
 
@@ -91,6 +92,45 @@ inputs are at the top of `.github/workflows/claude-review.yaml`.
   the next request reviews the same range again.
 - **The caller needs** `contents: read` and `pull-requests: write`, and must pass the secret
   explicitly.
+
+## Reporting failed scheduled runs to Slack
+
+A scheduled run has nobody watching it, so its failure is posted to Slack instead.  Each
+repository has one small watcher workflow naming the workflows to report; adding a scheduled
+workflow means adding its name there.
+
+```yaml
+name: 'Report scheduled failures'
+on:
+  workflow_run:
+    workflows: ['Nightly fuzzing', 'Mutation testing']
+    types: [completed]
+permissions:
+  actions: read
+jobs:
+  slack:
+    uses: L337-org/github-workflows/.github/workflows/slack-on-failure.yaml@<sha> # vX.Y.Z
+    secrets:
+      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+```
+
+- **What is reported.**  Runs started by a schedule, with any conclusion but success, skipped or
+  neutral, so a cancelled or timed-out run is posted as well as a failed one.  A run started any
+  other way is skipped: someone started it and is watching it.  The post names the repository,
+  the workflow, its conclusion and the jobs that did not succeed, and links the run.
+- **Where it goes.**  To the channel of the incoming webhook in the `SLACK_WEBHOOK` secret.  The
+  organisation's secret posts to the organisation's channel, and a repository with a channel of
+  its own sets a repository secret of the same name.  An incoming webhook posts to one channel
+  and can do nothing else.
+- **A post that fails, fails the watcher's run**, with Slack's answer in the error: a missing
+  secret, a webhook Slack refuses, or Slack unreachable after retries.  So a broken webhook shows
+  as a red watcher run rather than a failure that reached nobody.  A transient refusal is
+  retried, which can post the same failure twice.
+- **The watcher only fires from the default branch**, where GitHub reads `workflow_run`
+  triggers, which is where schedules run too.  So it is tested only once merged: by a scheduled
+  workflow that fails on purpose, removed again once it has posted.
+- **The caller needs** `actions: read`, to list the failed jobs; without it the post still
+  goes, saying the jobs could not be listed.
 
 ## Running the hygiene check locally
 
