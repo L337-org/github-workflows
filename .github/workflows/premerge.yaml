@@ -19,7 +19,7 @@ jobs:
     # request that makes it.  `actions/` holds the composite actions, whose `uses:` steps need
     # the same pins as any workflow's.
     runs-on: [ubuntu-latest]
-    name: Action pins are immutable
+    name: Action pin check
     timeout-minutes: 5
     steps:
       - name: Check out source repository
