@@ -11,8 +11,9 @@ description: 'Fail when any `uses:` in the checked-out repository names somethin
 # The one exception is L337-org/github-workflows at a version tag, such as `@v2` (DS.6.2).  It
 # holds only while a ruleset there blocks creating, moving and deleting `v*` tags with a bypass
 # list no wider than its main branch's, so that moving one takes the same people as merging; a
-# breaking change goes to a new major tag while callers stay on the old one.  It is named exactly rather than as the organisation,
-# because the exemption rests on that ruleset, which another repository may not have.
+# breaking change goes to a new major tag while callers stay on the old one.  It is named
+# exactly rather than as the organisation, because the exemption rests on that ruleset, which
+# another repository may not have.
 #
 # Quoted and upper-case SHAs are accepted because they are equally pinned, and the trailing
 # version comment is not enforced (DS.6.3): a guard that fails a legitimate pin for a cosmetic

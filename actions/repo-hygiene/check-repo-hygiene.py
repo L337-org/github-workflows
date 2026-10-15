@@ -636,8 +636,8 @@ def check_failed_runs_are_reported(root, tracked, files):
     return reported_run_findings(workflow_documents(root, tracked))
 
 
-def slack_channel_findings(documents):
-    """The findings of check_slack_calls_match_v2, over parsed workflows.
+def slack_call_findings(documents):
+    """The findings of check_slack_calls_take_channel_and_token, over parsed workflows.
 
     Args:
         documents (list): `(repo-relative path, document)` pairs, as workflow_documents returns.
@@ -679,13 +679,13 @@ def slack_channel_findings(documents):
     return findings
 
 
-def check_slack_calls_match_v2(root, tracked, files):
+def check_slack_calls_take_channel_and_token(root, tracked, files):
     """Every call to a shared Slack workflow names its channel and passes the bot token.
 
     Both workflows post through one bot token to the channel their caller names, so a caller
     written for the webhook the token replaced - no channel, `SLACK_WEBHOOK` - stops posting
-    when it moves to the version that requires them.  Its watcher only fires from the default branch, so
-    nothing else would say so before the move is merged.
+    when it moves to the version that requires them.  Its watcher only fires from the default
+    branch, so nothing else would say so before the move is merged.
 
     Args:
         root (pathlib.Path): repository root.
@@ -698,7 +698,7 @@ def check_slack_calls_match_v2(root, tracked, files):
     Raises:
         CannotEvaluate: A workflow could not be read or parsed, via workflow_documents.
     """
-    return slack_channel_findings(workflow_documents(root, tracked))
+    return slack_call_findings(workflow_documents(root, tracked))
 
 
 # Markdown links plus backtick-quoted paths, since a router routes both ways.
@@ -905,7 +905,7 @@ CHECKS = (
     ("no internal references in a public repository", check_no_internal_references),
     ("every CI job is bounded", check_ci_jobs_are_bounded),
     ("failed runs are reported", check_failed_runs_are_reported),
-    ("Slack calls name a channel and pass the token", check_slack_calls_match_v2),
+    ("Slack calls name a channel and pass the token", check_slack_calls_take_channel_and_token),
     ("the instruction layer is intact", check_the_instruction_layer),
     ("the detail layer and the router agree", check_the_detail_layer_routing),
 )
