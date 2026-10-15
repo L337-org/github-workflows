@@ -1,0 +1,18 @@
+name: 'Announce pull requests'
+
+# Posts each pull request that needs action to Slack through this repository's own announcer on
+# the pull request's branch (README.md).
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  slack:
+    name: Announce to Slack
+    uses: ./.github/workflows/slack-on-pull-request.yaml
+    with:
+      channel: '#l337-org'
+    secrets:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}

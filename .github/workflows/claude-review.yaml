@@ -1,6 +1,6 @@
 name: 'Claude review'
 
-# A reusable review job, called by each repository pinned to a commit of this one.  This
+# A reusable review job, called by each repository at a version tag of this one.  This
 # repository is public because a public caller cannot use a reusable workflow from a private one.
 #
 # Claude reads and returns a verdict; it never writes to GitHub.  It gets read-only tools, and

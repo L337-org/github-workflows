@@ -7,6 +7,7 @@ on:
     workflows:
       - 'Check inbound changes'
       - 'Code review'
+      - 'Announce pull requests'
     types: [completed]
 
 permissions:
@@ -19,6 +20,7 @@ jobs:
     name: Report to Slack
     uses: ./.github/workflows/slack-on-failure.yaml
     with:
+      channel: '#l337-org'
       events: '["schedule", "push", "release", "pull_request"]'
     secrets:
-      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
