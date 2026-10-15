@@ -1,15 +1,16 @@
 # github-workflows
 
 Shared GitHub workflows and actions for the L337-org organisation.  Each repository calls them
-pinned to a full commit SHA, which its own action-pins check requires, and Dependabot proposes
-the bumps.
+at their major-version tag, such as `@v2`, so a change released here reaches every repository
+without a pull request in each.  See [Versions and releases](#versions-and-releases).
 
 | Path | What it is | Call it as |
 |---|---|---|
-| `actions/repo-hygiene` | Composite action: the conventions every repository shares - no internal references, every CI job bounded, every failed run reported, the instruction layer intact, the detail layer routed. | a step, after `actions/checkout` |
-| `actions/action-pins` | Composite action: every `uses:` names a 40-hex commit SHA. | a step, after `actions/checkout` |
+| `actions/repo-hygiene` | Composite action: the conventions every repository shares - no internal references, every CI job bounded, every failed run reported, every Slack post given a channel, the instruction layer intact, the detail layer routed. | a step, after `actions/checkout` |
+| `actions/action-pins` | Composite action: every `uses:` names a 40-hex commit SHA, or a version tag of this repository. | a step, after `actions/checkout` |
 | `.github/workflows/claude-review.yaml` | Reusable workflow: a code review by Claude, full on the first round and a delta of the new commits after that. | a job with `uses:` |
 | `.github/workflows/slack-on-failure.yaml` | Reusable workflow: posts a failed run to Slack, naming the workflow and its failed jobs and linking the run. | a job with `uses:`, in a workflow triggered by `workflow_run` |
+| `.github/workflows/slack-on-pull-request.yaml` | Reusable workflow: posts a pull request that needs action to Slack - opened, reopened, or marked ready for review - and nothing else about it. | a job with `uses:`, in a workflow triggered by `pull_request` |
 
 ## Using them
 
@@ -21,7 +22,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@<sha> # vX.Y.Z
-      - uses: L337-org/github-workflows/actions/repo-hygiene@<sha>
+      - uses: L337-org/github-workflows/actions/repo-hygiene@v2
 
   action-pins:
     runs-on: [ubuntu-latest]
@@ -29,7 +30,7 @@ jobs:
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@<sha> # vX.Y.Z
-      - uses: L337-org/github-workflows/actions/action-pins@<sha>
+      - uses: L337-org/github-workflows/actions/action-pins@v2
 ```
 
 A job that calls a reusable workflow cannot declare `timeout-minutes`; the called workflow's
@@ -84,14 +85,14 @@ inputs are at the top of `.github/workflows/claude-review.yaml`.
   that push is at or after the comment or is not of the current head.  The review then checks
   out the head the gate passed rather than looking it up again.  So nothing pushed after the
   request is reviewed under the token.
-- **Bot and fork pull requests are skipped.**  GitHub gives no secrets to a run started by
+- **Bot and fork pull requests are skipped.**  GitHub gives no Actions secrets to a run started by
   Dependabot or by a fork pull request, and bot pull requests are reviewed by hand, so a gate job
-  skips those runs with a notice instead of failing.  A pull request a bot opened is skipped
-  whoever starts the run, since a person pushing to it or asking by comment brings the token with
-  them; a request by comment gets a reply saying so.  A fork pull request is refused even when a
-  maintainer asks by comment, because that run carries the token over text written by someone
-  with no access; the request gets a reply saying so.  A notice saying no token arrived, on a pull
-  request that is neither, means the secret is missing or not passed.
+  skips those runs with a notice instead of failing.  A pull request a bot opened is skipped whoever
+  starts the run, since a person pushing to it or asking by comment brings the token with them; a
+  request by comment gets a reply saying so.  A fork pull request is refused even when a maintainer
+  asks by comment, because that run carries the token over text written by someone with no access;
+  the request gets a reply saying so.  A notice saying no token arrived, on a pull request that is
+  neither, means the secret is missing or not passed.
 - **A review that returns no verdict says why.**  The comment headed `Claude review did not
   complete` and the run log both carry the session's result record - its status and error text,
   such as a usage limit - without the usage and cost figures.  The comment carries no marker, so
@@ -122,11 +123,12 @@ permissions:
 jobs:
   slack:
     name: Report to Slack
-    uses: L337-org/github-workflows/.github/workflows/slack-on-failure.yaml@<sha> # vX.Y.Z
+    uses: L337-org/github-workflows/.github/workflows/slack-on-failure.yaml@v2
     with:
+      channel: '#l337-org'
       events: '["schedule", "push", "release", "pull_request"]'
     secrets:
-      SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
 ```
 
 - **What is reported.**  A completed run of a listed workflow started by one of the `events`,
@@ -146,30 +148,94 @@ jobs:
   `release` or `pull_request` that no watcher reports for that trigger, on one with no `name:`,
   and on a listed name no workflow has, since GitHub matches on the name and a rename leaves the
   list reporting nothing.
-- **Where it goes.**  To the channel of the incoming webhook in the `SLACK_WEBHOOK` secret.  A
-  secret set on the organisation is every repository's default, and a repository secret of the
-  same name overrides it.  An incoming webhook posts to one channel and can do nothing else.
-- **A post that fails, fails the watcher's run**, with Slack's answer in the error: a missing
-  secret, a webhook Slack refuses, or Slack unreachable after retries.  A transient refusal is
-  retried, which can post the same failure twice.  **Accepted limitation:** the watcher's run is
-  itself a run nobody is watching, and nothing reports it, so a webhook that stops working is
+- **Where it goes.**  To the caller's `channel`, through the bot token in `SLACK_BOT_TOKEN`
+  (see [The Slack token](#the-slack-token)).
+- **A post that fails, fails the watcher's run**, with Slack's answer in the error: a missing secret
+  or channel, a refusal such as `not_in_channel`, or Slack unreachable after retries.  A transient
+  refusal is retried, which can post the same failure twice.  **Accepted limitation:** the watcher's
+  run is itself a run nobody is watching, and nothing reports it, so a token that stops working is
   noticed only by the absence of posts.  Filing an issue instead would scatter them across
-  repositories if filed in the failing one, and if filed here would need either a credential
-  that can write across repositories or a scheduled sweep of every repository's watcher runs.
+  repositories if filed in the failing one, and if filed here would need either a credential that
+  can write across repositories or a scheduled sweep of every repository's watcher runs.
 - **The watcher only fires from the default branch**, where GitHub reads `workflow_run`
   triggers.  So a change to it is tested only once merged.
 - **The caller must grant** `actions: read` and `contents: read`, as the example does, or
   GitHub refuses to start the reporter's job and nothing is posted.
 
+## Announcing pull requests to Slack
+
+A pull request nobody has been told about waits until someone happens to open its repository,
+which is how a stack of Dependabot pull requests goes unnoticed.  The GitHub app for Slack posts
+every later event on a pull request too, so each repository has an announcer instead, posting
+only when a pull request needs action:
+
+```yaml
+name: 'Announce pull requests'
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+permissions: {}
+jobs:
+  slack:
+    name: Announce to Slack
+    uses: L337-org/github-workflows/.github/workflows/slack-on-pull-request.yaml@v2
+    with:
+      channel: '#l337-org'
+    secrets:
+      SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+```
+
+- **What is posted.**  A pull request opened or reopened that is not a draft, and a draft marked
+  ready for review, so a draft is announced when it asks for review rather than when it is
+  started.  Dependabot's are posted like anyone else's.  The post names the repository, links
+  the pull request by number and title, and gives its author and base branch.
+- **What is not.**  A pull request from a fork, whose title and author a stranger chooses and
+  would reach the channel through the token.  Any other action, such as a push to the branch:
+  a caller whose `types:` include one gets a notice asking it to narrow them.  Each skip leaves
+  a notice in the run saying why.  A call from any event but `pull_request` fails, including
+  `pull_request_target`, which would hand the token to a run over a fork's pull request.
+- **Which channel.**  A repository with a Slack channel of its own posts there; every other
+  repository posts to `#l337-org`.
+- **List it in the watcher.**  It runs on `pull_request`, so the hygiene check requires its
+  `name:` in `report-failures.yaml` like any other workflow.  A failed announcement is reported
+  through the same token, so a token that stops working silences both.
+
+## The Slack token
+
+Both workflows post with `chat.postMessage` as the L337-org Slack app, through its bot token
+(`xoxb-`), to the channel each caller names.  One token serves every channel, where an incoming
+webhook serves one channel each and would need a secret per channel, twice over.
+
+- **Two organisation secrets, one value.**  `SLACK_BOT_TOKEN` as an Actions secret, and again as
+  a Dependabot secret, because a run Dependabot starts sees only Dependabot secrets.  Without the
+  second, Dependabot's pull requests are not announced.  An organisation secret on GitHub Free
+  reaches public repositories only.
+- **The app must be in the channel.**  Invite it to each channel a caller names, or the post
+  fails with `not_in_channel`.  A channel is named rather than given by ID, which works for a
+  public channel only; a private one needs its ID.
+- **What the token can do.**  More than a webhook could: it can post to every channel the app is
+  in, and do whatever else the app's scopes allow.  Keep the app's bot scopes to `chat:write`, so
+  a leaked token can post and nothing more.  **Accepted limitation:** a leaked token can post to
+  any of the app's channels, where a leaked webhook reached one; one secret pair to maintain
+  instead of two per channel was judged worth that.
+- **Rotating it.**  Reinstall the app or regenerate the token under "OAuth & Permissions" at
+  api.slack.com/apps, and replace both secrets.  A refused token fails each post with
+  `invalid_auth` or `token_revoked`, naming both secrets.
+- **Moving a caller from a v1 commit pin.**  Version 1 takes `SLACK_WEBHOOK` and no `channel`;
+  version 2 requires `channel` and `SLACK_BOT_TOKEN`.  Move every reference to `@v2` and change
+  the callers in the same pull request.  The v2 hygiene check fails a call to either workflow
+  that names no channel or does not pass `SLACK_BOT_TOKEN`, so a move that leaves a caller
+  unchanged fails its own pull request rather than breaking after merge.
+
 ## Running the hygiene check locally
 
-From the root of the repository to check, fetch the script at the commit that repository's
-`repo-hygiene` step pins, so a local run checks what its CI checks, and run it there:
+From the root of the repository to check, fetch the script at the version that repository's
+`repo-hygiene` step names, so a local run checks what its CI checks, and run it there:
 
 ```bash
-sha=<the commit after @ in the repository's repo-hygiene step>
+ref=<what follows @ in the repository's repo-hygiene step, such as v2>
 gh api -H 'Accept: application/vnd.github.raw' \
-  "repos/L337-org/github-workflows/contents/actions/repo-hygiene/check-repo-hygiene.py?ref=$sha" \
+  "repos/L337-org/github-workflows/contents/actions/repo-hygiene/check-repo-hygiene.py?ref=$ref" \
   > /tmp/check-repo-hygiene.py
 uv run --script /tmp/check-repo-hygiene.py .
 ```
@@ -182,11 +248,47 @@ uv run --script actions/repo-hygiene/check-repo-hygiene.py /path/to/repository
 
 Exit status is 0 clean, 1 on findings, 2 when the scan could not be trusted.
 
+## Versions and releases
+
+Callers name a major-version tag, `v2`, which is moved to each release of that major version.
+Each release also gets its full tag, such as `v2.0.0`, which never moves.
+
+- **Why a tag and not a commit.**  A commit pin needs a pull request in every repository for every
+  change here.  A tag of another repository would normally be refused, because its owner can repoint
+  it (DS.6).  The exemption holds only while a ruleset blocks creating, moving and deleting `v*`
+  tags here, with a bypass list no wider than `main`'s, so that moving `v2` takes the same people as
+  merging to `main`; loosening either withdraws it.  The action-pins check accepts this repository's
+  version tags and nothing else's; third-party actions still need a commit SHA.
+- **Releasing.**  Merge to `main`, publish a release with its full tag, then move the major tag
+  to the same commit:
+
+  ```bash
+  git fetch origin --tags
+  git tag -f v2 v2.0.1
+  git push -f origin refs/tags/v2
+  ```
+
+  Every caller runs the new code from its next run.  Tag only commits that are on `main`: the
+  ruleset cannot check that.
+- **A breaking change is a new major version.**  Anything that would make an unchanged caller
+  stop working or behave differently - a new required input, a removed one, a renamed secret -
+  is released as `v3.0.0` with a new `v3` tag, and `v2` stays where it is.  Each repository then
+  moves to `v3` in its own pull request, changing its callers at the same time, and nothing
+  breaks in between.
+
 ## Changing anything here
 
-Everything here runs in other repositories' CI, so a change reaches them only when each one
-bumps its pin.  This repository's own CI runs the action-pins action from the commit under
-review, lints every workflow and action with actionlint, and reviews each pull request with the
-pull request's own version of the Claude review, so a change to the review reviews itself.  The
-hygiene check does not run on this repository: it expects the instruction layer and detail layer
-of a product repository, which this one does not have.
+Everything here runs in other repositories' CI, so a change reaches them as soon as its release
+moves the major tag.  This repository's own CI runs the action-pins action from the commit under
+review, lints every workflow and action with actionlint, runs the Slack workflows' posting steps
+against stand-ins for `curl` and `gh` and the action-pins check over sample references
+(`tests/`), and reviews each pull request with the pull request's own version of the Claude
+review, so a change to the review reviews itself.  The hygiene check does not run on this
+repository: it expects the instruction layer and detail layer of a product repository, which
+this one does not have.
+
+To run the tests locally, from the root of a clone:
+
+```bash
+PYTHONDONTWRITEBYTECODE=1 uvx --with pyyaml==6.0.3 pytest==8.3.5 -p no:cacheprovider -q tests
+```

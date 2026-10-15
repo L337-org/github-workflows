@@ -2,7 +2,7 @@ name: 'Repository hygiene'
 description: 'Check the conventions every repository in the organisation shares, over the checked-out repository.'
 
 # Run after actions/checkout in the calling job, which keeps its own timeout-minutes.  The script
-# is this action's copy at the commit the caller pins, so every repository pinning one commit
+# is this action's copy at the version the caller names, so every repository on one version
 # runs the same checks.
 inputs:
   path:

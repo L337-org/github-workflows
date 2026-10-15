@@ -47,3 +47,23 @@ jobs:
         # SC2016 is shellcheck noting that `$x` does not expand inside single quotes.  Here that
         # is always Markdown backticks in a printf format, which is the intent.
         run: uvx --from actionlint-py==1.7.12.25 actionlint -ignore 'SC2016'
+
+  shared-behaviour:
+    # What the Slack workflows do on a refusal, a fork or a draft cannot be made to happen from a
+    # pull request here, and the action-pins check needs references this repository does not
+    # contain, so both are run against stand-ins and sample input instead.
+    runs-on: [ubuntu-latest]
+    name: Shared workflows and actions behave
+    timeout-minutes: 5
+    env:
+      # The tests import the hygiene script, and a checkout is left as it was found.
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check out source repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+
+      - name: Tests pass
+        run: uvx --with pyyaml==6.0.3 pytest==8.3.5 -p no:cacheprovider -q tests

@@ -2,31 +2,35 @@ name: 'Report a failed run to Slack'
 
 # Called from a repository's watcher workflow, which is started by `workflow_run` when one of the
 # workflows it names completes.  A failed run is otherwise one red entry in a list nobody opens;
-# this posts it to the channel behind `SLACK_WEBHOOK` instead.
+# this posts it to the caller's channel instead.
 #
 # The caller says which triggers to report with `events`.  A push is reported on the default
 # branch and on a tag, which is how a release is often started; a push to any other branch has
 # its pusher watching.  A pull request from a fork is not reported: its run uses the fork's own
 # workflow file, so its author writes the job names and branch the post would carry, and could
-# put text of their choosing in the channel through this webhook.  The same reasoning has the
+# put text of their choosing in the channel through this token.  The same reasoning has the
 # review refuse forks.  Only a completed run is reported, whatever `types:` the caller gives
 # `workflow_run`, and with every conclusion but success, skipped and neutral, so a conclusion
 # nobody anticipated is posted rather than passed over.  The filters are here, not in each
 # caller, so no caller can get them wrong.
 #
 # A post Slack does not accept fails this job, with Slack's answer in the error.  Nothing
-# reports the watcher's own run, so a webhook that stops working is noticed only by the absence
+# reports the watcher's own run, so a token that stops working is noticed only by the absence
 # of posts: an accepted limitation (README.md).
 on:
   workflow_call:
     inputs:
+      channel:
+        description: 'The Slack channel to post to, by name, such as `#l337-org`.  The app the token belongs to must be a member of it.'
+        type: string
+        required: true
       events:
         description: 'The triggers whose failed runs are reported, as a JSON list of event names, such as `["schedule", "push", "release", "pull_request"]`.  A manual run, `workflow_dispatch`, is best left out, because whoever started it is watching.'
         type: string
         required: true
     secrets:
-      SLACK_WEBHOOK:
-        description: 'A Slack incoming webhook URL, which posts to the one channel it was issued for.  Not required, so that a missing secret fails with a message naming it rather than GitHub refusing the call.'
+      SLACK_BOT_TOKEN:
+        description: 'A Slack bot token (`xoxb-`) with the `chat:write` scope.  Not required, so that a missing secret fails with a message naming it rather than GitHub refusing the call.'
         required: false
 
 jobs:
@@ -52,7 +56,8 @@ jobs:
     steps:
       - name: Post the failed run
         env:
-          SLACK_WEBHOOK: ${{ secrets.SLACK_WEBHOOK }}
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          CHANNEL: ${{ inputs.channel }}
           GH_TOKEN: ${{ github.token }}
           EVENT_NAME: ${{ github.event_name }}
           REPO: ${{ github.repository }}
@@ -106,8 +111,12 @@ jobs:
             fi
           fi
 
-          if [ -z "$SLACK_WEBHOOK" ]; then
-            echo "::error::No SLACK_WEBHOOK secret reached this workflow, so the failure of $WORKFLOW (run $RUN_URL) was not posted.  Set the secret on the repository or the organisation, and pass it in the caller's \`secrets:\`." >&2
+          if [ -z "$SLACK_BOT_TOKEN" ]; then
+            echo "::error::No SLACK_BOT_TOKEN secret reached this workflow, so the failure of $WORKFLOW (run $RUN_URL) was not posted.  Set it on the organisation as an Actions secret and as a Dependabot secret, and pass it in the caller's \`secrets:\`." >&2
+            exit 1
+          fi
+          if [ -z "$CHANNEL" ]; then
+            echo "::error::No channel was given, so the failure of $WORKFLOW (run $RUN_URL) was not posted.  Pass the channel name in the caller's \`with: channel:\`." >&2
             exit 1
           fi
 
@@ -127,21 +136,42 @@ jobs:
           Jobs: $(escape "$jobs")
           <$RUN_URL|Run $RUN_NUMBER, attempt $RUN_ATTEMPT> on \`$(escape "$BRANCH")\` at \`${SHA:0:12}\`"
 
-          # The body goes to a file because a retry truncates a file, where to standard output it
-          # would follow the refused attempt's body.
+          # The token goes to curl in a file, not on its command line, where any process on the
+          # runner could read it.  The body goes to a file because a retry truncates a file,
+          # where to standard output it would follow the refused attempt's body.
+          umask 077
+          header_file=$(mktemp)
           body_file=$(mktemp)
-          status=$(jq -n --arg text "$text" '{text: $text}' \
+          trap 'rm -f "$header_file" "$body_file"' EXIT
+          printf 'Authorization: Bearer %s\n' "$SLACK_BOT_TOKEN" > "$header_file"
+          # Unfurling is off so the post stays text rather than gaining a preview card.
+          status=$(jq -n --arg channel "$CHANNEL" --arg text "$text" \
+                      '{channel: $channel, text: $text, unfurl_links: false, unfurl_media: false}' \
             | curl --silent --show-error --max-time 30 --retry 3 \
-                --header 'Content-Type: application/json' --data @- \
-                --output "$body_file" --write-out '%{http_code}' "$SLACK_WEBHOOK") || {
-            echo "::error::Posting the failure of $WORKFLOW (run $RUN_URL) to Slack failed: curl could not complete the request." >&2
+                --header @"$header_file" --header 'Content-Type: application/json; charset=utf-8' \
+                --data @- --output "$body_file" --write-out '%{http_code}' \
+                https://slack.com/api/chat.postMessage) || {
+            echo "::error::Posting the failure of $WORKFLOW (run $RUN_URL) to $CHANNEL failed: curl could not complete the request." >&2
             exit 1
           }
-          body=$(cat "$body_file")
-          # Slack answers a post it accepts with 200 and the body `ok`, and anything else with an
-          # error code in the body, such as `invalid_token` or `channel_not_found`.
-          if [ "$status" != 200 ] || [ "$body" != ok ]; then
-            echo "::error::Slack refused the post about $WORKFLOW (run $RUN_URL): HTTP $status, $body" >&2
+          # Slack answers 200 with `"ok": false` and an `error` code for most refusals, such as
+          # `not_in_channel`, `channel_not_found` or `invalid_auth`.  An accepted post echoes the
+          # message back, so the cap for reading the answer is generous; a refusal that is not
+          # Slack's JSON, such as a proxy's error page, is quoted shorter.
+          body=$(head -c 65536 "$body_file")
+          if [ "$status" != 200 ] || [ "$(jq -r '.ok // empty' <<<"$body" 2>/dev/null)" != true ]; then
+            error=$(jq -r '.error // empty' <<<"$body" 2>/dev/null || true)
+            if [ "$(wc -c < "$body_file")" -gt 500 ]; then
+              body="$(head -c 500 "$body_file") ... (truncated at 500 bytes)"
+            fi
+            case "$error" in
+              not_in_channel) hint="  Invite the Slack app to $CHANNEL." ;;
+              channel_not_found) hint="  Check the channel name; a private channel needs its ID rather than its name." ;;
+              invalid_auth|not_authed|token_revoked|account_inactive) hint="  Replace SLACK_BOT_TOKEN with the app's current bot token, in both the Actions and the Dependabot secret." ;;
+              missing_scope) hint="  Give the app the chat:write scope and reinstall it." ;;
+              *) hint="" ;;
+            esac
+            echo "::error::Slack refused the post about $WORKFLOW (run $RUN_URL) in $CHANNEL: HTTP $status, ${error:-$body}.$hint" >&2
             exit 1
           fi
-          echo "Posted the failure of $WORKFLOW (run $RUN_URL) to Slack."
+          echo "Posted the failure of $WORKFLOW (run $RUN_URL) to $CHANNEL."

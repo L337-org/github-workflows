@@ -1,0 +1,134 @@
+name: 'Announce a pull request to Slack'
+
+# Called from a repository's announcer workflow, which is started by `pull_request` with
+# `types: [opened, reopened, ready_for_review]`.  A pull request nobody has been told about waits
+# until someone happens to open the repository, which is how a stack of Dependabot pull requests
+# goes unnoticed; this posts each one that needs action to the caller's channel instead.
+#
+# Posted: one opened or reopened that is not a draft, and a draft marked ready for review, so a
+# draft is announced once it asks for review rather than when it is started.  Dependabot's are
+# posted like anyone else's.  Not posted: one from a fork, whose title and author a stranger
+# chooses and would reach the channel through this token, and every other `pull_request` action,
+# such as a push to the branch, which is the activity the GitHub app for Slack makes too noisy.
+# The filters are in the step rather than the job's `if:` so each skip leaves a notice saying
+# why, and so `tests/` can run them.
+#
+# A post Slack does not accept fails this job, with Slack's answer in the error.
+on:
+  workflow_call:
+    inputs:
+      channel:
+        description: 'The Slack channel to post to, by name, such as `#l337-org`.  The app the token belongs to must be a member of it.'
+        type: string
+        required: true
+    secrets:
+      SLACK_BOT_TOKEN:
+        description: 'A Slack bot token (`xoxb-`) with the `chat:write` scope.  Not required, so that a missing secret fails with a message naming it rather than GitHub refusing the call.  A run Dependabot starts sees only Dependabot secrets, so it is set there too (README.md).'
+        required: false
+
+# The step reads only the event payload.
+permissions: {}
+
+jobs:
+  announce:
+    runs-on: [ubuntu-latest]
+    name: Announce the pull request to Slack
+    timeout-minutes: 5
+    steps:
+      - name: Post the pull request
+        env:
+          SLACK_BOT_TOKEN: ${{ secrets.SLACK_BOT_TOKEN }}
+          CHANNEL: ${{ inputs.channel }}
+          EVENT_NAME: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          REPO: ${{ github.repository }}
+          HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          DRAFT: ${{ github.event.pull_request.draft }}
+          NUMBER: ${{ github.event.pull_request.number }}
+          TITLE: ${{ github.event.pull_request.title }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          BASE: ${{ github.event.pull_request.base.ref }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: |
+          set -euo pipefail
+          # `pull_request_target` is refused along with everything else: it would hand the token
+          # to a run over a fork's pull request, which is the case the fork filter exists for.
+          if [ "$EVENT_NAME" != pull_request ]; then
+            echo "::error::This workflow announces a pull request, and was called from a \`$EVENT_NAME\` event.  Call it from a workflow triggered by \`pull_request\` with \`types: [opened, reopened, ready_for_review]\`." >&2
+            exit 1
+          fi
+          case "$ACTION" in
+            opened|reopened|ready_for_review) ;;
+            *)
+              echo "::notice::Not posted: pull request #$NUMBER was $ACTION, which is not one of opened, reopened or ready_for_review.  Narrow the caller's \`types:\` to those three."
+              exit 0
+              ;;
+          esac
+          # A fork that has since been deleted has no head repository, and is skipped with the rest.
+          if [ "$HEAD_REPO" != "$REPO" ]; then
+            echo "::notice::Not posted: pull request #$NUMBER comes from ${HEAD_REPO:-a deleted fork}, not $REPO."
+            exit 0
+          fi
+          if [ "$DRAFT" = true ]; then
+            echo "::notice::Not posted: pull request #$NUMBER is a draft.  It is posted when it is marked ready for review."
+            exit 0
+          fi
+
+          if [ -z "$SLACK_BOT_TOKEN" ]; then
+            echo "::error::No SLACK_BOT_TOKEN secret reached this workflow, so pull request #$NUMBER ($PR_URL) was not announced.  Set it on the organisation as an Actions secret and, for Dependabot's pull requests, as a Dependabot secret, and pass it in the caller's \`secrets:\`." >&2
+            exit 1
+          fi
+          if [ -z "$CHANNEL" ]; then
+            echo "::error::No channel was given, so pull request #$NUMBER ($PR_URL) was not announced.  Pass the channel name in the caller's \`with: channel:\`." >&2
+            exit 1
+          fi
+
+          case "$ACTION" in
+            opened) what=opened ;;
+            reopened) what=reopened ;;
+            ready_for_review) what="ready for review" ;;
+          esac
+          # Slack reads &, < and > as markup in message text.
+          escape() { sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' <<<"$1"; }
+          text="Pull request $what in $(escape "$REPO"): <$PR_URL|#$NUMBER $(escape "$TITLE")>
+          By \`$(escape "$AUTHOR")\`, into \`$(escape "$BASE")\`"
+
+          # The token goes to curl in a file, not on its command line, where any process on the
+          # runner could read it.  The body goes to a file because a retry truncates a file,
+          # where to standard output it would follow the refused attempt's body.
+          umask 077
+          header_file=$(mktemp)
+          body_file=$(mktemp)
+          trap 'rm -f "$header_file" "$body_file"' EXIT
+          printf 'Authorization: Bearer %s\n' "$SLACK_BOT_TOKEN" > "$header_file"
+          # Unfurling is off so the post stays one line of text rather than a preview card.
+          status=$(jq -n --arg channel "$CHANNEL" --arg text "$text" \
+                      '{channel: $channel, text: $text, unfurl_links: false, unfurl_media: false}' \
+            | curl --silent --show-error --max-time 30 --retry 3 \
+                --header @"$header_file" --header 'Content-Type: application/json; charset=utf-8' \
+                --data @- --output "$body_file" --write-out '%{http_code}' \
+                https://slack.com/api/chat.postMessage) || {
+            echo "::error::Announcing pull request #$NUMBER ($PR_URL) in $CHANNEL failed: curl could not complete the request." >&2
+            exit 1
+          }
+          # Slack answers 200 with `"ok": false` and an `error` code for most refusals, such as
+          # `not_in_channel`, `channel_not_found` or `invalid_auth`.  An accepted post echoes the
+          # message back, so the cap for reading the answer is generous; a refusal that is not
+          # Slack's JSON, such as a proxy's error page, is quoted shorter.
+          body=$(head -c 65536 "$body_file")
+          if [ "$status" != 200 ] || [ "$(jq -r '.ok // empty' <<<"$body" 2>/dev/null)" != true ]; then
+            error=$(jq -r '.error // empty' <<<"$body" 2>/dev/null || true)
+            if [ "$(wc -c < "$body_file")" -gt 500 ]; then
+              body="$(head -c 500 "$body_file") ... (truncated at 500 bytes)"
+            fi
+            case "$error" in
+              not_in_channel) hint="  Invite the Slack app to $CHANNEL." ;;
+              channel_not_found) hint="  Check the channel name; a private channel needs its ID rather than its name." ;;
+              invalid_auth|not_authed|token_revoked|account_inactive) hint="  Replace SLACK_BOT_TOKEN with the app's current bot token, in both the Actions and the Dependabot secret." ;;
+              missing_scope) hint="  Give the app the chat:write scope and reinstall it." ;;
+              *) hint="" ;;
+            esac
+            echo "::error::Slack refused the announcement of pull request #$NUMBER ($PR_URL) in $CHANNEL: HTTP $status, ${error:-$body}.$hint" >&2
+            exit 1
+          fi
+          echo "Announced pull request #$NUMBER ($PR_URL) in $CHANNEL."
