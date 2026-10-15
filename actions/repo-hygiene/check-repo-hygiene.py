@@ -12,7 +12,8 @@ divergence watch.  A single copy makes both unnecessary: a repository behind the
 shows as an older version rather than as a copy that has drifted.
 
 It checks the repository it is run in - the path given as its one argument, or the current
-directory.  To run it locally, fetch this file at the commit your repository pins and run
+directory.  To run it locally, fetch this file at the version your repository's `repo-hygiene`
+step names and run
 `uv run --script check-repo-hygiene.py <repository>`.
 
 A SCRIPT RATHER THAN A TEST MODULE, DELIBERATELY.  These checks are wanted in repositories that
@@ -636,7 +637,7 @@ def check_failed_runs_are_reported(root, tracked, files):
 
 
 def slack_channel_findings(documents):
-    """The findings of check_slack_posts_name_a_channel, over parsed workflows.
+    """The findings of check_slack_calls_match_v2, over parsed workflows.
 
     Args:
         documents (list): `(repo-relative path, document)` pairs, as workflow_documents returns.
@@ -658,15 +659,32 @@ def slack_channel_findings(documents):
                     f"{relative} job {job!r} calls {body['uses']!r} without a `with: channel:`, "
                     f"so it posts nowhere: name the Slack channel, such as '#l337-org'"
                 )
+            # `secrets: inherit` passes every secret the caller can see, the token among them.
+            secrets = body.get("secrets")
+            if secrets == "inherit":
+                continue
+            names = set(secrets) if isinstance(secrets, dict) else set()
+            if "SLACK_WEBHOOK" in names:
+                findings.append(
+                    f"{relative} job {job!r} passes `SLACK_WEBHOOK` to {body['uses']!r}, which "
+                    f"takes `SLACK_BOT_TOKEN` instead: pass "
+                    f"`SLACK_BOT_TOKEN: ${{{{ secrets.SLACK_BOT_TOKEN }}}}`"
+                )
+            elif "SLACK_BOT_TOKEN" not in names:
+                findings.append(
+                    f"{relative} job {job!r} calls {body['uses']!r} without passing "
+                    f"`SLACK_BOT_TOKEN` under `secrets:`, so every post fails: pass "
+                    f"`SLACK_BOT_TOKEN: ${{{{ secrets.SLACK_BOT_TOKEN }}}}`"
+                )
     return findings
 
 
-def check_slack_posts_name_a_channel(root, tracked, files):
-    """Every call to a shared Slack workflow names the channel it posts to.
+def check_slack_calls_match_v2(root, tracked, files):
+    """Every call to a shared Slack workflow names its channel and passes the bot token.
 
-    Both workflows post through one bot token to the channel their caller names, and the input
-    is required, so a caller written for the webhook the token replaced stops running when it
-    moves to the version that requires it.  Its watcher only fires from the default branch, so
+    Both workflows post through one bot token to the channel their caller names, so a caller
+    written for the webhook the token replaced - no channel, `SLACK_WEBHOOK` - stops posting
+    when it moves to the version that requires them.  Its watcher only fires from the default branch, so
     nothing else would say so before the move is merged.
 
     Args:
@@ -887,7 +905,7 @@ CHECKS = (
     ("no internal references in a public repository", check_no_internal_references),
     ("every CI job is bounded", check_ci_jobs_are_bounded),
     ("failed runs are reported", check_failed_runs_are_reported),
-    ("Slack posts name a channel", check_slack_posts_name_a_channel),
+    ("Slack calls name a channel and pass the token", check_slack_calls_match_v2),
     ("the instruction layer is intact", check_the_instruction_layer),
     ("the detail layer and the router agree", check_the_detail_layer_routing),
 )

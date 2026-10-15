@@ -85,14 +85,14 @@ inputs are at the top of `.github/workflows/claude-review.yaml`.
   that push is at or after the comment or is not of the current head.  The review then checks
   out the head the gate passed rather than looking it up again.  So nothing pushed after the
   request is reviewed under the token.
-- **Bot and fork pull requests are skipped.**  GitHub gives no Actions secrets to a run
-  started by Dependabot or by a fork pull request, and bot pull requests are reviewed by hand, so a gate job
-  skips those runs with a notice instead of failing.  A pull request a bot opened is skipped
-  whoever starts the run, since a person pushing to it or asking by comment brings the token with
-  them; a request by comment gets a reply saying so.  A fork pull request is refused even when a
-  maintainer asks by comment, because that run carries the token over text written by someone
-  with no access; the request gets a reply saying so.  A notice saying no token arrived, on a pull
-  request that is neither, means the secret is missing or not passed.
+- **Bot and fork pull requests are skipped.**  GitHub gives no Actions secrets to a run started by
+  Dependabot or by a fork pull request, and bot pull requests are reviewed by hand, so a gate job
+  skips those runs with a notice instead of failing.  A pull request a bot opened is skipped whoever
+  starts the run, since a person pushing to it or asking by comment brings the token with them; a
+  request by comment gets a reply saying so.  A fork pull request is refused even when a maintainer
+  asks by comment, because that run carries the token over text written by someone with no access;
+  the request gets a reply saying so.  A notice saying no token arrived, on a pull request that is
+  neither, means the secret is missing or not passed.
 - **A review that returns no verdict says why.**  The comment headed `Claude review did not
   complete` and the run log both carry the session's result record - its status and error text,
   such as a usage limit - without the usage and cost figures.  The comment carries no marker, so
@@ -150,13 +150,13 @@ jobs:
   list reporting nothing.
 - **Where it goes.**  To the caller's `channel`, through the bot token in `SLACK_BOT_TOKEN`
   (see [The Slack token](#the-slack-token)).
-- **A post that fails, fails the watcher's run**, with Slack's answer in the error: a missing
-  secret or channel, a refusal such as `not_in_channel`, or Slack unreachable after retries.  A transient refusal is
-  retried, which can post the same failure twice.  **Accepted limitation:** the watcher's run is
-  itself a run nobody is watching, and nothing reports it, so a token that stops working is
+- **A post that fails, fails the watcher's run**, with Slack's answer in the error: a missing secret
+  or channel, a refusal such as `not_in_channel`, or Slack unreachable after retries.  A transient
+  refusal is retried, which can post the same failure twice.  **Accepted limitation:** the watcher's
+  run is itself a run nobody is watching, and nothing reports it, so a token that stops working is
   noticed only by the absence of posts.  Filing an issue instead would scatter them across
-  repositories if filed in the failing one, and if filed here would need either a credential
-  that can write across repositories or a scheduled sweep of every repository's watcher runs.
+  repositories if filed in the failing one, and if filed here would need either a credential that
+  can write across repositories or a scheduled sweep of every repository's watcher runs.
 - **The watcher only fires from the default branch**, where GitHub reads `workflow_run`
   triggers.  So a change to it is tested only once merged.
 - **The caller must grant** `actions: read` and `contents: read`, as the example does, or
@@ -194,8 +194,8 @@ jobs:
   a caller whose `types:` include one gets a notice asking it to narrow them.  Each skip leaves
   a notice in the run saying why.  A call from any event but `pull_request` fails, including
   `pull_request_target`, which would hand the token to a run over a fork's pull request.
-- **Which channel.**  `#docker-mcp`, `#quaffed` and `#send-to-influx` serve their repositories;
-  every other repository posts to `#l337-org`.
+- **Which channel.**  A repository with a Slack channel of its own posts there; every other
+  repository posts to `#l337-org`.
 - **List it in the watcher.**  It runs on `pull_request`, so the hygiene check requires its
   `name:` in `report-failures.yaml` like any other workflow.  A failed announcement is reported
   through the same token, so a token that stops working silences both.
@@ -221,11 +221,11 @@ webhook serves one channel each and would need a secret per channel, twice over.
 - **Rotating it.**  Reinstall the app or regenerate the token under "OAuth & Permissions" at
   api.slack.com/apps, and replace both secrets.  A refused token fails each post with
   `invalid_auth` or `token_revoked`, naming both secrets.
-- **Moving a caller from v1.**  Version 1 takes `SLACK_WEBHOOK` and no `channel`; version 2
-  requires `channel` and `SLACK_BOT_TOKEN`.  Move every reference to `@v2` and change the
-  callers in the same pull request.  The v2 hygiene check fails a call to either workflow that
-  names no channel, so a move that leaves a caller unchanged fails its own pull request rather
-  than breaking after merge.
+- **Moving a caller from a v1 commit pin.**  Version 1 takes `SLACK_WEBHOOK` and no `channel`;
+  version 2 requires `channel` and `SLACK_BOT_TOKEN`.  Move every reference to `@v2` and change
+  the callers in the same pull request.  The v2 hygiene check fails a call to either workflow
+  that names no channel or does not pass `SLACK_BOT_TOKEN`, so a move that leaves a caller
+  unchanged fails its own pull request rather than breaking after merge.
 
 ## Running the hygiene check locally
 
@@ -253,12 +253,12 @@ Exit status is 0 clean, 1 on findings, 2 when the scan could not be trusted.
 Callers name a major-version tag, `v2`, which is moved to each release of that major version.
 Each release also gets its full tag, such as `v2.0.0`, which never moves.
 
-- **Why a tag and not a commit.**  A commit pin needs a pull request in every repository for
-  every change here.  A tag of another repository would normally be refused, because its owner
-  can repoint it (DS.6).  Here the `v*` tags are protected by a ruleset that blocks creating,
-  moving and deleting them, with a bypass list no wider than `main`'s, so moving `v2` takes the
-  same people as merging to `main`.  The action-pins check accepts this repository's version
-  tags and nothing else's; third-party actions still need a commit SHA.
+- **Why a tag and not a commit.**  A commit pin needs a pull request in every repository for every
+  change here.  A tag of another repository would normally be refused, because its owner can repoint
+  it (DS.6).  The exemption holds only while a ruleset blocks creating, moving and deleting `v*`
+  tags here, with a bypass list no wider than `main`'s, so that moving `v2` takes the same people as
+  merging to `main`; loosening either withdraws it.  The action-pins check accepts this repository's
+  version tags and nothing else's; third-party actions still need a commit SHA.
 - **Releasing.**  Merge to `main`, publish a release with its full tag, then move the major tag
   to the same commit:
 
@@ -282,10 +282,10 @@ Everything here runs in other repositories' CI, so a change reaches them as soon
 moves the major tag.  This repository's own CI runs the action-pins action from the commit under
 review, lints every workflow and action with actionlint, runs the Slack workflows' posting steps
 against stand-ins for `curl` and `gh` and the action-pins check over sample references
-(`tests/`), and reviews each pull request with the
-pull request's own version of the Claude review, so a change to the review reviews itself.  The
-hygiene check does not run on this repository: it expects the instruction layer and detail layer
-of a product repository, which this one does not have.
+(`tests/`), and reviews each pull request with the pull request's own version of the Claude
+review, so a change to the review reviews itself.  The hygiene check does not run on this
+repository: it expects the instruction layer and detail layer of a product repository, which
+this one does not have.
 
 To run the tests locally, from the root of a clone:
 

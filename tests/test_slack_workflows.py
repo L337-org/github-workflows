@@ -3,7 +3,7 @@
 Each step's script is read out of its workflow file and run under bash with the environment
 GitHub would give it, against stand-ins for `curl` and `gh` on PATH.  So what is tested is the
 script that ships, not a copy of it.  What this cannot test: the GitHub expressions that fill the
-environment, and Slack itself, which is exercised by the first announcement after merge.
+environment, and Slack itself.
 """
 
 import importlib.util
@@ -160,36 +160,6 @@ def test_missing_configuration_fails_naming_it(stubs, overrides, message):
     assert message in result.stderr
 
 
-@pytest.mark.parametrize("error,hint", [
-    ("not_in_channel", "Invite the Slack app to #l337-org"),
-    ("channel_not_found", "Check the channel name"),
-    ("invalid_auth", "Replace SLACK_BOT_TOKEN"),
-    ("missing_scope", "chat:write"),
-    ("something_new", ""),
-])
-def test_a_refusal_fails_with_slacks_error(stubs, error, hint):
-    result, _ = run(ANNOUNCER, stubs, pull_request(), body=json.dumps({"ok": False, "error": error}))
-    assert result.returncode == 1
-    assert f"HTTP 200, {error}." in result.stderr and hint in result.stderr
-
-
-def test_a_non_slack_answer_is_quoted_and_marked_truncated(stubs):
-    result, _ = run(ANNOUNCER, stubs, pull_request(), status="502", body="<html>" + "x" * 1000)
-    assert result.returncode == 1
-    assert "HTTP 502, <html>" in result.stderr and "(truncated at 500 bytes)" in result.stderr
-
-
-def test_a_long_acceptance_is_still_read_as_accepted(stubs):
-    body = json.dumps({"ok": True, "message": {"text": "x" * 5000}})
-    result, _ = run(ANNOUNCER, stubs, pull_request(), body=body)
-    assert result.returncode == 0, result.stderr
-
-
-def test_curl_failing_outright_fails(stubs):
-    result, _ = run(ANNOUNCER, stubs, pull_request(), curl_exit=28)
-    assert result.returncode == 1 and "curl could not complete" in result.stderr
-
-
 REPORTER = "slack-on-failure.yaml"
 
 
@@ -237,10 +207,55 @@ def test_the_reporter_fails_on_missing_configuration(stubs, overrides, message):
     assert message in result.stderr
 
 
-def test_the_reporter_fails_with_slacks_error(stubs):
-    result, _ = run(REPORTER, stubs, failed_run(), body='{"ok": false, "error": "not_in_channel"}')
+# The posting and refusal handling is the same code in both workflows, each a copy of the other,
+# so every case runs against both and a copy that drifts fails here.
+BOTH = pytest.mark.parametrize("workflow,environment,channel", [
+    (ANNOUNCER, pull_request, "#l337-org"),
+    (REPORTER, failed_run, "#docker-mcp"),
+])
+
+
+@BOTH
+@pytest.mark.parametrize("error,hint", [
+    ("not_in_channel", "Invite the Slack app to {channel}"),
+    ("channel_not_found", "Check the channel name"),
+    ("invalid_auth", "Replace SLACK_BOT_TOKEN"),
+    ("token_revoked", "Replace SLACK_BOT_TOKEN"),
+    ("missing_scope", "chat:write"),
+    ("something_new", ""),
+])
+def test_a_refusal_fails_with_slacks_error(stubs, workflow, environment, channel, error, hint):
+    result, _ = run(workflow, stubs, environment(), body=json.dumps({"ok": False, "error": error}))
     assert result.returncode == 1
-    assert "not_in_channel" in result.stderr and "Invite the Slack app to #docker-mcp" in result.stderr
+    assert f"HTTP 200, {error}." in result.stderr and hint.format(channel=channel) in result.stderr
+
+
+@BOTH
+def test_a_non_slack_answer_is_quoted_and_marked_truncated(stubs, workflow, environment, channel):
+    result, _ = run(workflow, stubs, environment(), status="502", body="<html>" + "x" * 1000)
+    assert result.returncode == 1
+    assert "HTTP 502, <html>" in result.stderr and "(truncated at 500 bytes)" in result.stderr
+
+
+@BOTH
+def test_a_long_acceptance_is_still_read_as_accepted(stubs, workflow, environment, channel):
+    body = json.dumps({"ok": True, "message": {"text": "x" * 5000}})
+    result, _ = run(workflow, stubs, environment(), body=body)
+    assert result.returncode == 0, result.stderr
+
+
+@BOTH
+def test_curl_failing_outright_fails(stubs, workflow, environment, channel):
+    result, _ = run(workflow, stubs, environment(), curl_exit=28)
+    assert result.returncode == 1 and "curl could not complete" in result.stderr
+
+
+@BOTH
+def test_the_token_reaches_curl_only_in_a_header_file(stubs, workflow, environment, channel):
+    run(workflow, stubs, environment())
+    assert (stubs / "curl.headers").read_text().startswith(f"Authorization: Bearer {TOKEN}")
+    assert TOKEN not in (stubs / "curl.args").read_text()
+    assert json.loads((stubs / "curl.stdin").read_text())["channel"] == channel
 
 
 def hygiene():
@@ -257,18 +272,27 @@ def hygiene():
     "L337-org/github-workflows/.github/workflows/slack-on-failure.yaml@" + "0" * 40,
     "./.github/workflows/slack-on-failure.yaml",
 ])
-@pytest.mark.parametrize("given,found", [
-    ({"channel": "#quaffed"}, False),
-    ({"channel": " "}, True),
-    ({}, True),
-    (None, True),
+@pytest.mark.parametrize("given,secrets,found", [
+    ({"channel": "#quaffed"}, {"SLACK_BOT_TOKEN": "${{ secrets.SLACK_BOT_TOKEN }}"}, []),
+    ({"channel": "#quaffed"}, "inherit", []),
+    ({"channel": " "}, {"SLACK_BOT_TOKEN": "x"}, ["without a `with: channel:`"]),
+    ({}, {"SLACK_BOT_TOKEN": "x"}, ["without a `with: channel:`"]),
+    (None, {"SLACK_BOT_TOKEN": "x"}, ["without a `with: channel:`"]),
+    ({"channel": "#quaffed"}, {"SLACK_WEBHOOK": "x"}, ["passes `SLACK_WEBHOOK`"]),
+    ({"channel": "#quaffed"}, {"SLACK_WEBHOOK": "x", "SLACK_BOT_TOKEN": "x"}, ["passes `SLACK_WEBHOOK`"]),
+    ({"channel": "#quaffed"}, None, ["without passing `SLACK_BOT_TOKEN`"]),
+    (None, {"SLACK_WEBHOOK": "x"}, ["without a `with: channel:`", "passes `SLACK_WEBHOOK`"]),
 ])
-def test_hygiene_requires_a_channel_on_every_slack_call(uses, given, found):
+def test_hygiene_requires_v2_inputs_on_every_slack_call(uses, given, secrets, found):
     body = {"uses": uses}
     if given is not None:
         body["with"] = given
+    if secrets is not None:
+        body["secrets"] = secrets
     findings = hygiene().slack_channel_findings([(".github/workflows/x.yaml", {"jobs": {"slack": body}})])
-    assert bool(findings) is found
+    assert len(findings) == len(found)
+    for finding, expected in zip(findings, found):
+        assert expected in finding
 
 
 def test_every_shipped_caller_here_names_a_channel():

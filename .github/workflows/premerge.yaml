@@ -48,11 +48,12 @@ jobs:
         # is always Markdown backticks in a printf format, which is the intent.
         run: uvx --from actionlint-py==1.7.12.25 actionlint -ignore 'SC2016'
 
-  slack-workflows:
-    # The Slack workflows run only in other repositories' events - a pull request opening, a run
-    # failing - so their posting steps are run here against stand-ins for curl and gh instead.
+  shared-behaviour:
+    # What the Slack workflows do on a refusal, a fork or a draft cannot be made to happen from a
+    # pull request here, and the action-pins check needs references this repository does not
+    # contain, so both are run against stand-ins and sample input instead.
     runs-on: [ubuntu-latest]
-    name: Slack workflows behave
+    name: Shared workflows and actions behave
     timeout-minutes: 5
     env:
       # The tests import the hygiene script, and a checkout is left as it was found.
