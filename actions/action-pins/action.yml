@@ -1,4 +1,4 @@
-name: 'Action pins are immutable'
+name: 'Action pin check'
 description: 'Fail when any `uses:` in the checked-out repository names something other than a full 40-hex commit SHA, or a version tag of L337-org/github-workflows.'
 
 # A tag or branch ref can be repointed by the action's owner at any time, so `@v7` means CI runs

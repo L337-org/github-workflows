@@ -26,7 +26,7 @@ jobs:
 
   action-pins:
     runs-on: [ubuntu-latest]
-    name: Action pins are immutable
+    name: Action pin check
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@<sha> # vX.Y.Z
