@@ -17,6 +17,8 @@ import textwrap
 import pytest
 import yaml
 
+from conftest import load_hygiene
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / ".github" / "workflows"
 TOKEN = "xoxb-test-" + os.urandom(8).hex()
@@ -259,12 +261,7 @@ def test_the_token_reaches_curl_only_in_a_header_file(stubs, workflow, environme
 
 
 def hygiene():
-    spec = importlib.util.spec_from_file_location(
-        "check_repo_hygiene", ROOT / "actions" / "repo-hygiene" / "check-repo-hygiene.py"
-    )
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+    return load_hygiene()
 
 
 @pytest.mark.parametrize("uses", [
