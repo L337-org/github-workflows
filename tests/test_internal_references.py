@@ -6,7 +6,6 @@ find.
 """
 
 import pytest
-
 from conftest import load_hygiene
 
 

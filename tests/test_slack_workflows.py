@@ -15,7 +15,6 @@ import textwrap
 
 import pytest
 import yaml
-
 from conftest import load_hygiene
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
