@@ -30,6 +30,7 @@ def test_an_external_standard_is_not_a_tracker_key(tmp_path, line):
     # Only the Unicode licence's name is let through, not every key ending its shape.
     ("Fixes ", "DFS" + "-2016"),
     ("MyUnicode-", "DFS" + "-2016"),
+    ("Unicode-", "XY" + "-22"),
 ])
 def test_a_tracker_key_is_reported(tmp_path, before, key):
     assert findings(tmp_path, before + key) == [f"copyright:1: tracker key {key}"]

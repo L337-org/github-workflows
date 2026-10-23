@@ -81,11 +81,12 @@ TRACKER_KEY = re.compile(r"\b[A-Z]{2,10}-\d+\b(?!\.\d)")
 # evidenced exceptions rather than a way to quiet a genuine hit.
 NOT_A_TRACKER_KEY = re.compile(r"\b(?:ISO-\d+|RFC-\d+|SHA-\d+|UTF-\d+|AES-\d+|PEP-\d+|CVE-\d+|SMETS-\d+|FLEX-\d+|GPL-\d+|LGPL-\d+|AGPL-\d+)\b")
 
-# Same shape at the end of a longer standard's name, read from what comes just before it, since
-# a match cannot see past its own start: Unicode-DFS-2016, the SPDX name of Unicode's data files
-# licence, which a Debian copyright file must spell exactly.  Only that name is let through, so a
-# project whose keys start DFS- is still reported.
-PART_OF_A_STANDARD = re.compile(r"\bUnicode-$")
+# Same shape at the end of a longer standard's name, matched against the line up to the key's
+# end, since the key alone cannot see what comes before it: Unicode-DFS-2016, the SPDX name of
+# Unicode's data files licence, which a Debian copyright file must spell exactly.  Only that name
+# is let through, so a project whose keys start DFS-, or a key that follows "Unicode-", is still
+# reported.
+PART_OF_A_STANDARD = re.compile(r"\bUnicode-DFS-\d+$")
 
 # Any link into the internal Atlassian site, not only a wiki one.  Review asked whether this
 # should require a /wiki/ path, since the name said "wiki link" while the pattern also matched a
@@ -413,7 +414,7 @@ def check_no_internal_references(root, tracked, files):
             for match in TRACKER_KEY.finditer(line):
                 span = match.group(0)
                 if not NOT_A_TRACKER_KEY.search(span) and not PART_OF_A_STANDARD.search(
-                    line[: match.start()]
+                    line[: match.end()]
                 ):
                     findings.append(f"{relative}:{number}: tracker key {span}")
             for match in INTERNAL_LINK.finditer(line):
