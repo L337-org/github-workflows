@@ -233,28 +233,35 @@ jobs:
               comments = [json.loads(line) for line in f if line.strip()]
 
           # Only this workflow's own comments carry markers, so one typed by anyone else cannot
-          # steer the next review.  The last marker in a comment is the one this workflow
-          # appended; an earlier one would be text quoted inside the review.
+          # steer the next review.  A marker counts only at the very end of a comment, where this
+          # workflow writes it: one anywhere else is text quoted inside a review, which a review
+          # with no marker of its own - an incomplete one - would otherwise let count.
           MARKER = re.compile(r"<!-- claude-review reviewed-sha=([0-9a-f]{40})"
-                              r"(?: depth=(full|delta))?(?: trigger=(push|other))? -->")
+                              r"(?: depth=(full|delta))?(?: trigger=(push|other))? -->\s*\Z")
+          INCOMPLETE = re.compile(r"<!-- claude-review incomplete trigger=(push|other) -->\s*\Z")
           PAUSED = "<!-- claude-review paused -->"
           OWN = "github-actions[bot]"
-          reviews, paused_at = [], []
+          reviews, incomplete, paused_at = [], [], []
           for i, c in enumerate(comments):
               if c["user"]["login"] != OWN:
                   continue
-              found = MARKER.findall(c["body"])
-              if found:
-                  sha, depth, trigger = found[-1]
+              if found := MARKER.search(c["body"]):
+                  sha, depth, trigger = found.groups()
                   # Markers from before depth and trigger were recorded were all full reviews.
                   reviews.append({"i": i, "sha": sha, "depth": depth or "full",
                                   "trigger": trigger or "other", "body": c["body"]})
-              elif PAUSED in c["body"]:
+              elif found := INCOMPLETE.search(c["body"]):
+                  incomplete.append({"i": i, "trigger": found.group(1)})
+              elif c["body"].rstrip().endswith(PAUSED):
                   paused_at.append(i)
 
           last = reviews[-1] if reviews else None
           last_full = max((r["i"] for r in reviews if r["depth"] == "full"), default=-1)
-          pushes_since_full = sum(1 for r in reviews if r["i"] > last_full and r["trigger"] == "push")
+          # An incomplete review reviewed nothing, so it moves no range, but a push-triggered one
+          # still counts towards the bound: a large pull request that never finishes would
+          # otherwise be reviewed in full on every push.
+          pushes_since_full = sum(1 for r in reviews + incomplete
+                                  if r["i"] > last_full and r["trigger"] == "push")
           already_paused = any(i > last_full for i in paused_at)
 
           def is_ancestor(a, b):
@@ -332,7 +339,7 @@ jobs:
           # Agent and Workflow hand work to other sessions, which a review here cannot wait on or be
           # allowed to start.  Offered them, a review of a large change can plan to split itself
           # into passes and then return a review of only the part it read itself.  Not offered
-          # them, it reads the whole change, which the 60-minute timeout leaves room for.
+          # them, it reads the whole change.
           claude_args: |
             --effort ${{ steps.range.outputs.effort }}
             ${{ steps.range.outputs.model != '' && format('--model {0}', steps.range.outputs.model) || '' }}
@@ -352,8 +359,7 @@ jobs:
             and review against them.  They are written for assistants doing the work as well as
             reviewing it; apply the review rules, and judge the change against the rest.
 
-            Read the whole change yourself: there are no other agents to hand parts of it to, and
-            the job allows an hour.
+            Read the whole change yourself: there are no other agents to hand parts of it to.
 
             For a full review: cover everything the pull request changes, with depth over speed.
             Read the surrounding code, not only the diff, and look at failure paths, at tests that
@@ -490,16 +496,18 @@ jobs:
           fi
 
           # A review that did not cover the whole range is posted, so its findings are not lost,
-          # but fails the run and carries no marker, so the next request reviews the same range
-          # again.  Anything but an explicit `true` counts as not complete: a check that cannot
-          # tell must not pass.
+          # but fails the run and carries no reviewed marker, so the next request reviews the same
+          # range again.  Its own marker counts it towards the bound on automatic rounds.
+          # Anything but an explicit `true` counts as not complete: a check that cannot tell must
+          # not pass.
           if ! jq -e '.complete == true' >/dev/null <<<"$REVIEW_JSON"; then
             {
               printf '## Claude review: incomplete\n\n'
-              printf 'This %s review did not cover every file in `%s..%s`, so it does not stand for a review of the range, and its verdict on what it read was %s.  Comment `/claude-review full` for another.\n\n' \
+              printf 'This %s review did not cover every file in `%s..%s`, so it does not stand for a review of the range, and its verdict on what it read was %s.  Comment `/claude-review` to review the same range again, or `/claude-review full` for a full review.\n\n' \
                 "$MODE" "${FROM:0:12}" "${HEAD_SHA:0:12}" "${verdict//_/ }"
               jq -r '.review' <<<"$REVIEW_JSON"
               printf '\n\n---\n_%s review of `%s..%s`, incomplete.  [Run](%s)._\n' "$MODE" "${FROM:0:12}" "${HEAD_SHA:0:12}" "$RUN_URL"
+              printf '\n<!-- claude-review incomplete trigger=%s -->\n' "$TRIGGER"
             } > "$body"
             gh pr comment "$PR" --repo "$GITHUB_REPOSITORY" --body-file "$body"
             echo "::error::The review did not cover every file in the range; it is posted as incomplete and the range will be reviewed again."
