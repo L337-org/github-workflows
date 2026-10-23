@@ -62,7 +62,8 @@ inputs are at the top of `.github/workflows/claude-review.yaml`.
   A request by comment always runs, and a full review restarts the count.
 - **Where the last review stopped.**  Each review comment ends with a marker naming the commit it
   reviewed, the depth, and whether a push started it.  Only this workflow's own comments are
-  read for it.  A force-push that drops that commit from the branch falls back to a full review.
+  read for it, and a marker counts only at the end of one, so one quoted in a review's text does
+  not.  A force-push that drops that commit from the branch falls back to a full review.
   A request by comment for a commit already reviewed is answered without running one; a push of
   one only says so in the log, because nobody asked.
 - **Recorded state.**  Every review checks what the change adds to documentation and comments
@@ -72,8 +73,16 @@ inputs are at the top of `.github/workflows/claude-review.yaml`.
   then worse than nothing; a record of what was done belongs in the commit message or pull
   request.
 - **What Claude can do.**  Read the checkout and run `git diff`, `git log` and `git show`.  It
-  returns a verdict, approve or changes requested, and a review body as structured output, and a
-  later step posts them, so the session never holds a token that can write to GitHub.
+  returns a verdict, approve or changes requested, whether the review covered every file in the
+  range, and a review body as structured output, and a later step posts them, so the session
+  never holds a token that can write to GitHub.  It is not offered `Agent` or `Workflow`, the
+  tools that start other agents, so it reads the whole change itself rather than planning to
+  split a large one into passes and returning a review of only the part it read.
+- **An incomplete review fails.**  A review that did not cover every file is posted, headed
+  `Claude review: incomplete` with the verdict on what it read, and fails the run, so the check
+  is never green over a part nobody reviewed.  It carries no reviewed marker, so the next request
+  reviews the same range again, but a marker of its own counts it towards the bound on automatic
+  rounds when a push started it.
 - **One at a time.**  Runs for the same pull request queue on the job, so only real requests
   reach the queue.  A running review is never cancelled.  Of two waiting, the newer one runs,
   and the range it covers starts at the last commit a posted review recorded, so commits the
@@ -280,12 +289,12 @@ Each release also gets its full tag, such as `v2.0.0`, which never moves.
 
 Everything here runs in other repositories' CI, so a change reaches them as soon as its release
 moves the major tag.  This repository's own CI runs the action-pins action from the commit under
-review, lints every workflow and action with actionlint, runs the Slack workflows' posting steps
-against stand-ins for `curl` and `gh` and the action-pins check over sample references
-(`tests/`), and reviews each pull request with the pull request's own version of the Claude
-review, so a change to the review reviews itself.  The hygiene check does not run on this
-repository: it expects the instruction layer and detail layer of a product repository, which
-this one does not have.
+review, lints every workflow and action with actionlint, runs the Slack workflows' and the Claude
+review's posting steps against stand-ins for `curl` and `gh`, and the action-pins check over
+sample references (`tests/`), and reviews each pull request with the pull request's own version
+of the Claude review, so a change to the review reviews itself.  The hygiene check does not run
+on this repository: it expects the instruction layer and detail layer of a product repository,
+which this one does not have.
 
 To run the tests locally, from the root of a clone:
 
