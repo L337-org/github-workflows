@@ -6,7 +6,6 @@ script that ships, not a copy of it.  What this cannot test: the GitHub expressi
 environment, and Slack itself.
 """
 
-import importlib.util
 import json
 import os
 import pathlib
@@ -260,10 +259,6 @@ def test_the_token_reaches_curl_only_in_a_header_file(stubs, workflow, environme
     assert json.loads((stubs / "curl.stdin").read_text())["channel"] == channel
 
 
-def hygiene():
-    return load_hygiene()
-
-
 @pytest.mark.parametrize("uses", [
     "L337-org/github-workflows/.github/workflows/slack-on-pull-request.yaml@" + "0" * 40,
     "L337-org/github-workflows/.github/workflows/slack-on-failure.yaml@" + "0" * 40,
@@ -286,7 +281,7 @@ def test_hygiene_requires_v2_inputs_on_every_slack_call(uses, given, secrets, fo
         body["with"] = given
     if secrets is not None:
         body["secrets"] = secrets
-    findings = hygiene().slack_call_findings([(".github/workflows/x.yaml", {"jobs": {"slack": body}})])
+    findings = load_hygiene().slack_call_findings([(".github/workflows/x.yaml", {"jobs": {"slack": body}})])
     assert len(findings) == len(found)
     for finding, expected in zip(findings, found):
         assert expected in finding
@@ -296,4 +291,4 @@ def test_every_shipped_caller_here_names_a_channel_and_passes_the_token():
     documents = [
         (p.name, yaml.safe_load(p.read_text())) for p in sorted(WORKFLOWS.glob("*.yaml"))
     ]
-    assert hygiene().slack_call_findings(documents) == []
+    assert load_hygiene().slack_call_findings(documents) == []
