@@ -8,6 +8,10 @@ without a pull request in each.  See [Versions and releases](#versions-and-relea
 |---|---|---|
 | `actions/repo-hygiene` | Composite action: the conventions every repository shares - no internal references, every CI job bounded, every failed run reported, every Slack post given a channel, the instruction layer intact, the detail layer routed. | a step, after `actions/checkout` |
 | `actions/action-pins` | Composite action: every `uses:` names a 40-hex commit SHA, or a version tag of this repository. | a step, after `actions/checkout` |
+| `actions/release-preflight` | Composite action: fails a release that is not this organisation's, whose tag is not the declared version, or whose major version is 0 and is not marked pre-release. | a step, first in a workflow triggered by `release` |
+| `actions/release-attach` | Composite action: attaches built files to the release, replacing any an earlier failed run left, then checks the release serves each as built. | a step, with `files:` |
+| `.github/workflows/release-cancelled.yaml` | Reusable workflow: fails the run when a release workflow's job was cancelled, as its timeout does, so the release reports. | a job with `uses:`, after the release's last job |
+| `actions/apt-install` | Composite action: installs packages from the runner image's apt sources, with the downloaded files cached and checked against the signed index, and each apt call bounded and retried. | a step, with `packages:` |
 | `.github/workflows/claude-review.yaml` | Reusable workflow: a code review by Claude, full on the first round and a delta of the new commits after that. | a job with `uses:` |
 | `.github/workflows/slack-on-failure.yaml` | Reusable workflow: posts a failed run to Slack, naming the workflow and its failed jobs and linking the run. | a job with `uses:`, in a workflow triggered by `workflow_run` |
 | `.github/workflows/slack-on-pull-request.yaml` | Reusable workflow: posts a pull request that needs action to Slack - opened, reopened, or marked ready for review - and nothing else about it. | a job with `uses:`, in a workflow triggered by `pull_request` |
@@ -36,6 +40,84 @@ jobs:
 A job that calls a reusable workflow cannot declare `timeout-minutes`; the called workflow's
 jobs carry the bound.  The hygiene check cannot see those jobs from the calling repository, so it
 reports such a call as not checked rather than failing or passing it.
+
+## Installing from apt
+
+```yaml
+      - name: Install the musl C toolchain and lintian
+        uses: L337-org/github-workflows/actions/apt-install@v2
+        with:
+          packages: musl-tools lintian
+```
+
+- **Retried, and bounded.**  An Ubuntu mirror can refuse a download for a moment, hang, or list
+  a package version its pool does not hold yet.  Each apt call has a timeout and apt's own
+  download retries, a failed install reads the package lists again before trying again, and the
+  whole is tried five times, 15 seconds apart, before the step fails naming what it was doing and
+  how the last attempt ended.  `retry.sh` beside the action says which failure each part answers.
+  The job's `timeout-minutes` is still the bound over all of it.
+- **Cached, never changed.**  The downloaded `.deb` files are cached under a key naming each
+  package, version and architecture apt is about to install, so the cache changes how fast a
+  package arrives, never which version.  Each restored file is checked against the SHA-256 the
+  signed index lists before it is installed, since apt checks only a cached file's size.
+- **On the runner only.**  It runs `sudo apt-get` on the runner image.  An install inside a
+  container the job starts, such as `docker run debian:12`, cannot call an action and is not
+  covered.
+
+## Releasing
+
+A release workflow, triggered by `release: published`, checks the release first, builds, then
+attaches what it built, and fails if a job was cancelled:
+
+```yaml
+jobs:
+  build-and-release:
+    runs-on: [ubuntu-latest]
+    timeout-minutes: 20
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@<sha> # vX.Y.Z
+      - name: Read the declared version
+        id: version
+        run: echo "version=$(scripts/version)" >>"$GITHUB_OUTPUT"
+      - uses: L337-org/github-workflows/actions/release-preflight@v2
+        with:
+          version: ${{ steps.version.outputs.version }}
+      - name: Build
+        run: scripts/build-deb
+      - uses: L337-org/github-workflows/actions/release-attach@v2
+        with:
+          files: dist/*.deb
+
+  report-cancelled:
+    needs: [build-and-release]
+    if: always() && needs.build-and-release.result == 'cancelled'
+    uses: L337-org/github-workflows/.github/workflows/release-cancelled.yaml@v2
+    with:
+      job: build-and-release
+```
+
+- **The tag is the declared version, as text.**  Versions are compared as each repository writes
+  them, three parts or two, never parsed, after the `tag-prefix` the repository tags with: `v`
+  by default, as new repositories tag `v1.2.3`.  One that tags the bare version, as in `6.2`,
+  passes `tag-prefix: ''`.  Each repository only has to be consistent with its own history.
+  GitHub documents a default only for an input not given, so that one given as empty overrides
+  it is held by this repository's `input-defaults` premerge job.
+- **A major version of 0 is always a pre-release.**  Preflight fails such a release unless it is
+  marked pre-release, read from the release when the step runs, so ticking the flag and
+  re-running is enough.
+- **A file already on the release is replaced.**  Preflight lets through only releases that
+  should be built, so a file of the same name means an earlier run of this release failed after
+  attaching it, and this run is recovering: one identical to the build is left as it is, and
+  anything else, an unfinished upload included, is deleted and uploaded again, with a warning.
+- **What the release serves is checked.**  Each file is read back from the release and compared
+  with the build, rather than trusting the upload's exit status.
+- **`files:` takes whitespace-separated paths**, and a shell glob in it is expanded by the
+  step's shell, so `dist/*.deb` works.  Every file must exist before any is attached.
+- **A cancelled job fails the run.**  A job killed by its `timeout-minutes` ends as cancelled,
+  which raises no failure notification, so `release-cancelled` turns it into a failure.  Use it
+  only where nothing supersedes a run, as in a release workflow with no `concurrency` group.
 
 ## The Claude review
 
@@ -290,8 +372,10 @@ Each release also gets its full tag, such as `v2.0.0`, which never moves.
 Everything here runs in other repositories' CI, so a change reaches them as soon as its release
 moves the major tag.  This repository's own CI runs the action-pins action from the commit under
 review, lints every workflow and action with actionlint, runs the Slack workflows' and the Claude
-review's posting steps against stand-ins for `curl` and `gh`, and the action-pins check over
-sample references (`tests/`), and reviews each pull request with the pull request's own version
+review's posting steps against stand-ins for `curl` and `gh`, the action-pins check over
+sample references, apt-install's retries against stand-ins for apt, and the release actions
+against a fake release (`tests/`), runs
+apt-install itself on a runner, and reviews each pull request with the pull request's own version
 of the Claude review, so a change to the review reviews itself.  The hygiene check does not run
 on this repository: it expects the instruction layer and detail layer of a product repository,
 which this one does not have.

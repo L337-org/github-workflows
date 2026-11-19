@@ -1,0 +1,31 @@
+name: 'Input default probe'
+description: 'Fail unless the value input arrives as the caller expects: this repository''s own CI, holding how GitHub treats an input given as empty against a default.'
+
+# release-preflight defaults tag-prefix to v, and a repository whose tags have no prefix passes
+# tag-prefix: '' to opt out.  That works only if an input given as an empty string reaches the
+# action empty, rather than falling back to its default, which GitHub does not document: its
+# metadata syntax says only that a default is used when an input is not given.  So the premerge
+# job calls this probe both ways, and fails if either changes.
+inputs:
+  value:
+    description: 'The value to check.'
+    required: false
+    default: 'v'
+  expected:
+    description: 'What value should be once GitHub has applied, or not applied, its default.'
+    required: true
+
+runs:
+  using: composite
+  steps:
+    - name: The value arrived as expected
+      shell: bash
+      env:
+        VALUE: ${{ inputs.value }}
+        EXPECTED: ${{ inputs.expected }}
+      run: |
+        if [ "$VALUE" != "$EXPECTED" ]; then
+          echo "::error::input-default-probe: the value input arrived as '$VALUE', but '$EXPECTED' was expected, so GitHub now treats an input given as empty differently from how release-preflight's tag-prefix relies on" >&2
+          exit 1
+        fi
+        echo "input-default-probe: the value input arrived as '$VALUE', as expected"

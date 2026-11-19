@@ -50,8 +50,9 @@ jobs:
 
   shared-behaviour:
     # What the Slack workflows do on a refusal, a fork or a draft cannot be made to happen from a
-    # pull request here, and the action-pins check needs references this repository does not
-    # contain, so both are run against stand-ins and sample input instead.
+    # pull request here, the action-pins check needs references this repository does not
+    # contain, and apt-install's retries need a mirror that fails, so each is run against
+    # stand-ins and sample input instead.
     runs-on: [ubuntu-latest]
     name: Shared workflows and actions behave
     timeout-minutes: 5
@@ -67,3 +68,65 @@ jobs:
 
       - name: Tests pass
         run: uvx --with pyyaml==6.0.3 pytest==8.3.5 -p no:cacheprovider -q tests
+
+  apt-install:
+    # This repository's own action, from this commit, on a runner: what the tests' stand-ins
+    # cannot show - real apt, the archive directory's ownership, and the cache.  Two calls in one
+    # job, the second with its packages one to a line, each keeping its own files.
+    runs-on: [ubuntu-latest]
+    name: apt-install installs
+    timeout-minutes: 15
+    steps:
+      - name: Check out source repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install one package
+        id: first
+        uses: ./actions/apt-install
+        with:
+          packages: sl
+
+      - name: Install another, one to a line
+        uses: ./actions/apt-install
+        with:
+          packages: |
+            figlet
+
+      - name: Both are installed, and each call kept its own files
+        run: |
+          dpkg -s sl figlet >/dev/null
+          shopt -s nullglob
+          for package in sl figlet; do
+            files=(/var/cache/apt/apt-install/*/"${package}"_*.deb)
+            if (( ${#files[@]} != 1 )); then
+              echo "::error::expected one cached ${package} file, found ${#files[@]}: ${files[*]}" >&2
+              exit 1
+            fi
+          done
+          dirs=(/var/cache/apt/apt-install/*/)
+          if (( ${#dirs[@]} != 2 )); then
+            echo "::error::expected an archive directory per call, found ${#dirs[@]}: ${dirs[*]}" >&2
+            exit 1
+          fi
+
+  input-defaults:
+    # release-preflight's tag-prefix defaults to v, and a repository with bare tags opts out by
+    # passing ''.  GitHub does not document that an input given as empty overrides a default, so
+    # this holds it, from this repository's own CI, before any release relies on it.
+    runs-on: [ubuntu-latest]
+    name: An input given as empty overrides its default
+    timeout-minutes: 5
+    steps:
+      - name: Check out source repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Not given, the default applies
+        uses: ./.github/actions/input-default-probe
+        with:
+          expected: v
+
+      - name: Given as empty, it stays empty
+        uses: ./.github/actions/input-default-probe
+        with:
+          value: ''
+          expected: ''

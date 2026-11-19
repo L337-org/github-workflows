@@ -1,0 +1,40 @@
+name: 'Report a cancelled release as a failure'
+
+# A job killed by its timeout-minutes ends as cancelled, not failed, so GitHub raises no
+# failure notification for it, and a release that never finished reads as a cancellation.  A
+# release runs unattended when it is published, so the caller's release workflow ends with a
+# job calling this one when its last job was cancelled, and this one fails, so the run reports:
+#
+#   report-cancelled:
+#     needs: [build-and-release]
+#     if: always() && needs.build-and-release.result == 'cancelled'
+#     uses: L337-org/github-workflows/.github/workflows/release-cancelled.yaml@v2
+#     with:
+#       job: build-and-release
+#
+# Only a release workflow, which nothing supersedes: in one whose runs cancel each other, a
+# superseded run would be reported too.
+
+on:
+  workflow_call:
+    inputs:
+      job:
+        description: 'The job that was cancelled, as the caller names it, to say which in the error.'
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  fail:
+    name: Fail the run, because a cancellation would not notify
+    runs-on: [ubuntu-latest]
+    # Only has to bound runner startup: this job writes an error and exits.
+    timeout-minutes: 5
+    steps:
+      - name: Fail
+        env:
+          JOB: ${{ inputs.job }}
+        run: |
+          echo "::error::The $JOB job ended as cancelled, which is what its timeout-minutes produces, so this run fails: the release did not finish, and a cancellation would not have said so" >&2
+          exit 1
