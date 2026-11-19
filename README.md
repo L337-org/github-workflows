@@ -8,6 +8,7 @@ without a pull request in each.  See [Versions and releases](#versions-and-relea
 |---|---|---|
 | `actions/repo-hygiene` | Composite action: the conventions every repository shares - no internal references, every CI job bounded, every failed run reported, every Slack post given a channel, the instruction layer intact, the detail layer routed. | a step, after `actions/checkout` |
 | `actions/action-pins` | Composite action: every `uses:` names a 40-hex commit SHA, or a version tag of this repository. | a step, after `actions/checkout` |
+| `actions/apt-install` | Composite action: installs packages from the runner image's apt sources, with the downloaded files cached and checked against the signed index, and each apt call bounded and retried. | a step, with `packages:` |
 | `.github/workflows/claude-review.yaml` | Reusable workflow: a code review by Claude, full on the first round and a delta of the new commits after that. | a job with `uses:` |
 | `.github/workflows/slack-on-failure.yaml` | Reusable workflow: posts a failed run to Slack, naming the workflow and its failed jobs and linking the run. | a job with `uses:`, in a workflow triggered by `workflow_run` |
 | `.github/workflows/slack-on-pull-request.yaml` | Reusable workflow: posts a pull request that needs action to Slack - opened, reopened, or marked ready for review - and nothing else about it. | a job with `uses:`, in a workflow triggered by `pull_request` |
@@ -36,6 +37,29 @@ jobs:
 A job that calls a reusable workflow cannot declare `timeout-minutes`; the called workflow's
 jobs carry the bound.  The hygiene check cannot see those jobs from the calling repository, so it
 reports such a call as not checked rather than failing or passing it.
+
+## Installing from apt
+
+```yaml
+      - name: Install the musl C toolchain and lintian
+        uses: L337-org/github-workflows/actions/apt-install@v2
+        with:
+          packages: musl-tools lintian
+```
+
+- **Retried, and bounded.**  An Ubuntu mirror can refuse a download for a moment, hang, or list
+  a package version its pool does not hold yet.  Each apt call has a timeout and apt's own
+  download retries, a failed install reads the package lists again before trying again, and the
+  whole is tried five times, 15 seconds apart, before the step fails naming what it was doing and
+  how the last attempt ended.  `retry.sh` beside the action says which failure each part answers.
+  The job's `timeout-minutes` is still the bound over all of it.
+- **Cached, never changed.**  The downloaded `.deb` files are cached under a key naming each
+  package, version and architecture apt is about to install, so the cache changes how fast a
+  package arrives, never which version.  Each restored file is checked against the SHA-256 the
+  signed index lists before it is installed, since apt checks only a cached file's size.
+- **On the runner only.**  It runs `sudo apt-get` on the runner image.  An install inside a
+  container the job starts, such as `docker run debian:12`, cannot call an action and is not
+  covered.
 
 ## The Claude review
 
