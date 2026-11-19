@@ -147,5 +147,5 @@ runs:
         # failure: it also happens, rightly, when the image already has every package.
         debs=("$APT_ARCHIVES"/*.deb)
         if (( ${#debs[@]} == 0 )); then
-          echo "::warning::apt-install: no package file is left in $APT_ARCHIVES, so nothing will be cached: either the image has every package already, or its apt configuration deletes downloads (APT::Keep-Downloaded-Packages, or a clean hook)"
+          echo "::warning::apt-install: no package file is left in $APT_ARCHIVES, so nothing will be cached: either the image has every package already, or its apt configuration deletes downloads (APT::Keep-Downloaded-Packages)"
         fi

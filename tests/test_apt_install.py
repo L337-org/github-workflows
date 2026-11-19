@@ -8,7 +8,6 @@ mirror and apt, the ownership of the archive directory, and the cache.
 """
 
 import hashlib
-
 import os
 import pathlib
 import stat
