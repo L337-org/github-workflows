@@ -42,6 +42,13 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          # The tools' versions are pinned in this file, not in a requirements or project file,
+          # so the cache is keyed on it: a changed pin starts a new cache.  Each job installs
+          # different tools, so each has a cache of its own; with one key between them, the
+          # first to save would keep the other's tools out of it.
+          cache-dependency-glob: .github/workflows/premerge.yaml
+          cache-suffix: ${{ github.job }}
 
       - name: Workflows lint clean
         # SC2016 is shellcheck noting that `$x` does not expand inside single quotes.  Here that
@@ -65,6 +72,13 @@ jobs:
 
       - name: Set up uv
         uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          # The tools' versions are pinned in this file, not in a requirements or project file,
+          # so the cache is keyed on it: a changed pin starts a new cache.  Each job installs
+          # different tools, so each has a cache of its own; with one key between them, the
+          # first to save would keep the other's tools out of it.
+          cache-dependency-glob: .github/workflows/premerge.yaml
+          cache-suffix: ${{ github.job }}
 
       - name: Tests pass
         run: uvx --with pyyaml==6.0.3 pytest==8.3.5 -p no:cacheprovider -q tests
