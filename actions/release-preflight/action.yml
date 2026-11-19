@@ -1,0 +1,69 @@
+name: 'Release preflight'
+description: 'Fail a release that is not this organisation''s, whose tag does not name the version the repository declares, or whose major version is 0 and that is not marked pre-release.'
+
+# Run first in a workflow triggered by `release: published`, so nothing is built for a release
+# that should not have been published.
+#
+# - The repository's owner must be L337-org, so a fork's copy of the workflow builds nothing.
+# - The tag must be the declared version exactly, after the prefix the repository tags with:
+#   versions are compared as text, never parsed, since repositories write them differently,
+#   three parts or two.
+# - A major version of 0 is always for trying out, so its release must be marked pre-release,
+#   which keeps it off anything a user might install from by accident.  Read from the release
+#   now, not from the event, because a re-run replays the original event: ticking the flag and
+#   re-running is then enough.
+inputs:
+  version:
+    description: 'The version the repository declares, as it writes it, such as 1.2.3 or 6.2.'
+    required: true
+  tag-prefix:
+    description: 'What the repository puts before the version in a release tag, such as v.  None by default.'
+    required: false
+    default: ''
+  token:
+    description: 'A token that can read the release.'
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: The release is this organisation's, and its tag names the declared version
+      shell: bash
+      env:
+        EVENT: ${{ github.event_name }}
+        OWNER: ${{ github.repository_owner }}
+        REPO: ${{ github.repository }}
+        TAG: ${{ github.event.release.tag_name }}
+        RELEASE_ID: ${{ github.event.release.id }}
+        VERSION: ${{ inputs.version }}
+        PREFIX: ${{ inputs.tag-prefix }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        if [ "$EVENT" != release ]; then
+          echo "::error::release-preflight: checks a release, but this run was started by '$EVENT', so there is no release to check" >&2
+          exit 1
+        fi
+        if [ "$OWNER" != "L337-org" ]; then
+          echo "::error::release-preflight: this release was published from repository owner '$OWNER', not L337-org, so nothing is built" >&2
+          exit 1
+        fi
+        if [ -z "$VERSION" ]; then
+          echo "::error::release-preflight: the version input is empty, so the tag '$TAG' cannot be checked against it; pass the version the repository declares" >&2
+          exit 1
+        fi
+        if [ "$TAG" != "$PREFIX$VERSION" ]; then
+          echo "::error::release-preflight: the release's tag is '$TAG', but the repository declares $VERSION, so the tag must be '$PREFIX$VERSION'" >&2
+          exit 1
+        fi
+        if [ "${VERSION%%.*}" = 0 ]; then
+          if ! prerelease="$(gh api "repos/$REPO/releases/$RELEASE_ID" --jq .prerelease)"; then
+            echo "::error::release-preflight: could not read release $RELEASE_ID of $REPO to see whether it is marked pre-release; gh's error is above" >&2
+            exit 1
+          fi
+          if [ "$prerelease" != true ]; then
+            echo "::error::release-preflight: $VERSION has a major version of 0, so its release must be marked as a pre-release; edit release $RELEASE_ID, tick pre-release, and re-run this workflow" >&2
+            exit 1
+          fi
+        fi
+        echo "release-preflight: releasing $VERSION, tagged $TAG, from $GITHUB_SHA"

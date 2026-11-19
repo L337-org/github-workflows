@@ -1,0 +1,125 @@
+name: 'Attach files to a release'
+description: 'Attach built files to the release that started the run, replacing any of the same name a failed earlier run left, then check the release serves each one as built.'
+
+# The one place a release's files are put on it, so publishing them somewhere else as well - a
+# package repository that is pushed to, say, rather than one that pulls - is a change here.
+#
+# A file of the same name already on the release means an earlier run of this release got that
+# far and then failed, since preflight refuses anything else.  The run is recovering from that,
+# so the file is replaced: one identical to the build is left as it is, and anything else -
+# different bytes, or an upload that never finished - is deleted and uploaded again, with a
+# warning naming it.
+#
+# What the release serves is read back afterwards and compared byte for byte with the build,
+# rather than inferred from the upload's exit status.
+inputs:
+  files:
+    description: 'The files to attach, separated by any whitespace; each may be a glob, such as dist/*.deb.  Each is attached under its own name.'
+    required: true
+  release-id:
+    description: 'The release to attach them to.  The one that started the run by default.'
+    required: false
+    default: ${{ github.event.release.id }}
+  token:
+    description: 'A token that can write to the release: the job needs contents: write.'
+    required: false
+    default: ${{ github.token }}
+
+runs:
+  using: composite
+  steps:
+    - name: Attach each file, then check the release serves it as built
+      shell: bash
+      env:
+        FILES: ${{ inputs.files }}
+        RELEASE_ID: ${{ inputs.release-id }}
+        REPO: ${{ github.repository }}
+        GH_TOKEN: ${{ inputs.token }}
+      run: |
+        read -ra words -d '' <<<"$FILES" || true
+        # Each word is a path or a glob, expanded here; one matching nothing is kept as written,
+        # so the check below names it.
+        files=()
+        for word in "${words[@]}"; do
+          shopt -s nullglob
+          # shellcheck disable=SC2206
+          matches=($word)
+          shopt -u nullglob
+          if (( ${#matches[@]} == 0 )); then files+=("$word"); else files+=("${matches[@]}"); fi
+        done
+        if (( ${#files[@]} == 0 )); then
+          echo "::error::release-attach: the files input names no file" >&2
+          exit 1
+        fi
+        if [ -z "$RELEASE_ID" ]; then
+          echo "::error::release-attach: no release to attach to: this run was not started by a release, and no release-id was given" >&2
+          exit 1
+        fi
+        # Every file is checked before any is attached, so a missing one leaves the release as
+        # it was rather than half-attached.
+        for file in "${files[@]}"; do
+          if [ ! -f "$file" ]; then
+            echo "::error::release-attach: $(printf %q "$file") does not exist, so nothing is attached; the step that builds it says why" >&2
+            exit 1
+          fi
+        done
+
+        list() {
+          gh api "repos/$REPO/releases/$RELEASE_ID/assets" --paginate --jq '.[] | "\(.id) \(.name) \(.state)"'
+        }
+        fetch() {
+          gh api -H "Accept: application/octet-stream" "repos/$REPO/releases/assets/$1" >"$2"
+        }
+
+        assets="$(list)"
+        for file in "${files[@]}"; do
+          name="$(basename "$file")"
+          id="" state=""
+          read -r id _ state <<<"$(awk -v n="$name" '$2 == n' <<<"$assets")" || true
+          if [ -n "${id:-}" ]; then
+            if [ "$state" = uploaded ]; then
+              fetch "$id" "$RUNNER_TEMP/release-attach-existing"
+              if cmp -s "$file" "$RUNNER_TEMP/release-attach-existing"; then
+                echo "release-attach: $name is already attached and identical; left as it is"
+                continue
+              fi
+              echo "::warning::release-attach: $name is already attached and differs from this build, so an earlier run of this release attached a different build; replacing it"
+            else
+              echo "::warning::release-attach: $name is already on the release as an upload that never finished ($state), left by an earlier run; replacing it"
+            fi
+            gh api --method DELETE "repos/$REPO/releases/assets/$id" >/dev/null
+          fi
+          case "$name" in
+            *.deb) type=application/vnd.debian.binary-package ;;
+            *) type=application/octet-stream ;;
+          esac
+          # GitHub's response is kept, because on a refusal its body is what says why.
+          if ! curl --fail-with-body --silent --show-error --max-time 300 \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H "Accept: application/vnd.github+json" \
+            -H "Content-Type: $type" \
+            --data-binary "@$file" \
+            --output "$RUNNER_TEMP/release-attach-upload.json" \
+            "https://uploads.github.com/repos/$REPO/releases/$RELEASE_ID/assets?name=$name"; then
+            echo "::error::release-attach: uploading $name to release $RELEASE_ID failed; GitHub said: $(cat "$RUNNER_TEMP/release-attach-upload.json" 2>/dev/null)" >&2
+            exit 1
+          fi
+          echo "release-attach: $name attached, sha256 $(sha256sum <"$file" | cut -d' ' -f1)"
+        done
+
+        assets="$(list)"
+        for file in "${files[@]}"; do
+          name="$(basename "$file")"
+          id="" state=""
+          read -r id _ state <<<"$(awk -v n="$name" '$2 == n' <<<"$assets")" || true
+          if [ -z "${id:-}" ] || [ "$state" != uploaded ]; then
+            echo "::error::release-attach: release $RELEASE_ID does not serve $name after attaching it" >&2
+            exit 1
+          fi
+          fetch "$id" "$RUNNER_TEMP/release-attach-served"
+          if ! cmp -s "$file" "$RUNNER_TEMP/release-attach-served"; then
+            echo "::error::release-attach: release $RELEASE_ID serves a $name that differs from the one built" >&2
+            exit 1
+          fi
+          echo "release-attach: $name served as built"
+        done
