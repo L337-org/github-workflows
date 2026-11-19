@@ -14,7 +14,7 @@ description: 'Attach built files to the release that started the run, replacing 
 # rather than inferred from the upload's exit status.
 inputs:
   files:
-    description: 'The files to attach, separated by any whitespace; each may be a glob, such as dist/*.deb.  Each is attached under its own name.'
+    description: 'The files to attach, separated by any whitespace; each may be a glob, such as dist/*.deb.  Each is attached under its own name, which cannot hold whitespace.'
     required: true
   release-id:
     description: 'The release to attach them to.  The one that started the run by default.'
@@ -36,6 +36,7 @@ runs:
         REPO: ${{ github.repository }}
         GH_TOKEN: ${{ inputs.token }}
       run: |
+        words=()
         read -ra words -d '' <<<"$FILES" || true
         # Each word is a path or a glob, expanded here; one matching nothing is kept as written,
         # so the check below names it.
@@ -89,6 +90,8 @@ runs:
             fi
             gh api --method DELETE "repos/$REPO/releases/assets/$id" >/dev/null
           fi
+          # Encoded, so a name holding & # % or a space reaches GitHub as one parameter.
+          encoded="$(jq -rn --arg n "$name" '$n | @uri')"
           case "$name" in
             *.deb) type=application/vnd.debian.binary-package ;;
             *) type=application/octet-stream ;;
@@ -100,7 +103,7 @@ runs:
             -H "Content-Type: $type" \
             --data-binary "@$file" \
             --output "$RUNNER_TEMP/release-attach-upload.json" \
-            "https://uploads.github.com/repos/$REPO/releases/$RELEASE_ID/assets?name=$name"; then
+            "https://uploads.github.com/repos/$REPO/releases/$RELEASE_ID/assets?name=$encoded"; then
             echo "::error::release-attach: uploading $name to release $RELEASE_ID failed; GitHub said: $(cat "$RUNNER_TEMP/release-attach-upload.json" 2>/dev/null)" >&2
             exit 1
           fi

@@ -49,13 +49,16 @@ CURL = textwrap.dedent("""\
       esac
       shift
     done
-    name="${url##*name=}"
-    echo "upload $name" >> "$STUB_DIR/calls"
+    encoded="${url##*name=}"
+    name="$(printf '%b' "${encoded//%/\\\\x}")"
+    echo "upload $encoded" >> "$STUB_DIR/calls"
     if [ -n "${STUB_CURL_FAIL:-}" ]; then
       printf '%s' "$STUB_CURL_FAIL" > "$out"
       exit 22
     fi
-    id=$(( $(wc -l < "$STUB_DIR/assets") + 100 ))
+    # A counter, never reused, as GitHub's ids are not after a delete.
+    id=$(( $(cat "$STUB_DIR/next-id" 2>/dev/null || echo 100) + 1 ))
+    echo "$id" > "$STUB_DIR/next-id"
     echo "$id $name uploaded" >> "$STUB_DIR/assets"
     if [ -n "${STUB_CORRUPT:-}" ]; then echo corrupt > "$STUB_DIR/asset-$id"; else cp "$data" "$STUB_DIR/asset-$id"; fi
     echo '{}' > "$out"
@@ -198,6 +201,14 @@ def test_a_glob_attaches_what_it_matches_and_one_matching_nothing_is_named(stubs
     result, _ = attach(stubs, "dist/*.rpm")
     assert result.returncode == 1
     assert "dist/\\*.rpm does not exist, so nothing is attached" in result.stderr
+
+
+def test_a_name_url_syntax_would_split_reaches_github_whole(stubs):
+    built(stubs, "a&b#1%.deb", b"x")
+    result, calls = attach(stubs, "a&b#1%.deb")
+    assert result.returncode == 0, result.stderr
+    assert "upload a%26b%231%25.deb" in calls
+    assert served(stubs) == {"a&b#1%.deb": b"x"}
 
 
 def test_an_identical_file_already_attached_is_left_as_it_is(stubs):
