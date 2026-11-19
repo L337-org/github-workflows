@@ -108,3 +108,25 @@ jobs:
             echo "::error::expected an archive directory per call, found ${#dirs[@]}: ${dirs[*]}" >&2
             exit 1
           fi
+
+  input-defaults:
+    # release-preflight's tag-prefix defaults to v, and a repository with bare tags opts out by
+    # passing ''.  GitHub does not document that an input given as empty overrides a default, so
+    # this holds it, from this repository's own CI, before any release relies on it.
+    runs-on: [ubuntu-latest]
+    name: An input given as empty overrides its default
+    timeout-minutes: 5
+    steps:
+      - name: Check out source repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Not given, the default applies
+        uses: ./.github/actions/input-default-probe
+        with:
+          expected: v
+
+      - name: Given as empty, it stays empty
+        uses: ./.github/actions/input-default-probe
+        with:
+          value: ''
+          expected: ''
