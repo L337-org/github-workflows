@@ -15,6 +15,12 @@ runs:
   steps:
     - name: Set up uv
       uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+      with:
+        # The script pins its own dependencies, inline, and lives in this action's directory,
+        # not the caller's workspace, where setup-uv would otherwise look and find nothing: a
+        # warning on every caller's run that the cache is never invalidated.  setup-uv hashes
+        # files outside the workspace too.
+        cache-dependency-glob: ${{ github.action_path }}/check-repo-hygiene.py
 
     - name: Repository conventions hold
       shell: bash
