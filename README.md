@@ -314,8 +314,9 @@ Each release also gets its full tag, such as `v2.0.0`, which never moves.
 Everything here runs in other repositories' CI, so a change reaches them as soon as its release
 moves the major tag.  This repository's own CI runs the action-pins action from the commit under
 review, lints every workflow and action with actionlint, runs the Slack workflows' and the Claude
-review's posting steps against stand-ins for `curl` and `gh`, and the action-pins check over
-sample references (`tests/`), and reviews each pull request with the pull request's own version
+review's posting steps against stand-ins for `curl` and `gh`, the action-pins check over
+sample references, and apt-install's retries against stand-ins for apt (`tests/`), runs
+apt-install itself on a runner, and reviews each pull request with the pull request's own version
 of the Claude review, so a change to the review reviews itself.  The hygiene check does not run
 on this repository: it expects the instruction layer and detail layer of a product repository,
 which this one does not have.
