@@ -90,7 +90,7 @@ runs:
             fi
             gh api --method DELETE "repos/$REPO/releases/assets/$id" >/dev/null
           fi
-          # Encoded, so a name holding & # % or a space reaches GitHub as one parameter.
+          # Encoded, so a name holding & # or % reaches GitHub as one parameter.
           encoded="$(jq -rn --arg n "$name" '$n | @uri')"
           case "$name" in
             *.deb) type=application/vnd.debian.binary-package ;;
