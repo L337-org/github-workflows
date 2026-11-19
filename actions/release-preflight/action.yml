@@ -7,7 +7,11 @@ description: 'Fail a release that is not this organisation''s, whose tag does no
 # - The repository's owner must be L337-org, so a fork's copy of the workflow builds nothing.
 # - The tag must be the declared version exactly, after the prefix the repository tags with:
 #   versions are compared as text, never parsed, since repositories write them differently,
-#   three parts or two.
+#   three parts or two.  The prefix is for people, saying the tag is a version, not part of the
+#   version itself; a repository's tags only need to be consistent with each other, so each says
+#   which it uses.  The default is none rather than v, though v is what new repositories use,
+#   because a repository with bare tags would otherwise have to pass an empty string, and GitHub
+#   does not document whether an explicit empty input overrides a default or falls back to it.
 # - A major version of 0 is always for trying out, so its release must be marked pre-release,
 #   which keeps it off anything a user might install from by accident.  Read from the release
 #   now, not from the event, because a re-run replays the original event: ticking the flag and
@@ -17,7 +21,7 @@ inputs:
     description: 'The version the repository declares, as it writes it, such as 1.2.3 or 6.2.'
     required: true
   tag-prefix:
-    description: 'What the repository puts before the version in a release tag, such as v.  None by default.'
+    description: 'What the repository puts before the version in a release tag, such as v for v1.2.3.  None by default, for a repository that tags the bare version, as in 6.2.'
     required: false
     default: ''
   token:

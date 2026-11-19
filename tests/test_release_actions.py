@@ -123,6 +123,13 @@ def test_a_release_tagged_with_the_declared_version_passes(stubs):
     assert calls == []
 
 
+def test_the_prefix_defaults_to_none():
+    # So a repository with bare tags passes nothing, never an explicit empty string, whose
+    # meaning against a default GitHub does not document.
+    document = yaml.safe_load((ROOT / PREFLIGHT).read_text())
+    assert document["inputs"]["tag-prefix"]["default"] == ""
+
+
 def test_a_two_part_version_with_no_prefix_passes(stubs):
     result, _ = preflight(stubs, TAG="6.2", VERSION="6.2", PREFIX="")
     assert result.returncode == 0, result.stderr

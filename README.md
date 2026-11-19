@@ -100,8 +100,9 @@ jobs:
 ```
 
 - **The tag is the declared version, as text.**  Versions are compared as each repository writes
-  them, three parts or two, never parsed, after the `tag-prefix` the repository tags with,
-  which is none by default.
+  them, three parts or two, never parsed, after the `tag-prefix` the repository tags with.  New
+  repositories tag `v1.2.3` and pass `tag-prefix: v`; one that tags the bare version, as in
+  `6.2`, leaves it out.  Each repository only has to be consistent with its own history.
 - **A major version of 0 is always a pre-release.**  Preflight fails such a release unless it is
   marked pre-release, read from the release when the step runs, so ticking the flag and
   re-running is enough.
