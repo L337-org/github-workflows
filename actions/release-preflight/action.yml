@@ -9,9 +9,9 @@ description: 'Fail a release that is not this organisation''s, whose tag does no
 #   versions are compared as text, never parsed, since repositories write them differently,
 #   three parts or two.  The prefix is for people, saying the tag is a version, not part of the
 #   version itself; a repository's tags only need to be consistent with each other, so each says
-#   which it uses.  The default is none rather than v, though v is what new repositories use,
-#   because a repository with bare tags would otherwise have to pass an empty string, and GitHub
-#   does not document whether an explicit empty input overrides a default or falls back to it.
+#   which it uses.  The default is v, what new repositories use; one with bare tags passes an
+#   empty string.  GitHub documents a default only for an input not given, so that an input
+#   given as empty overrides it is held by this repository's input-defaults premerge job.
 # - A major version of 0 is always for trying out, so its release must be marked pre-release,
 #   which keeps it off anything a user might install from by accident.  Read from the release
 #   now, not from the event, because a re-run replays the original event: ticking the flag and
@@ -21,9 +21,9 @@ inputs:
     description: 'The version the repository declares, as it writes it, such as 1.2.3 or 6.2.'
     required: true
   tag-prefix:
-    description: 'What the repository puts before the version in a release tag, such as v for v1.2.3.  None by default, for a repository that tags the bare version, as in 6.2.'
+    description: 'What the repository puts before the version in a release tag: v by default, as in v1.2.3.  A repository that tags the bare version, as in 6.2, passes an empty string.'
     required: false
-    default: ''
+    default: 'v'
   token:
     description: 'A token that can read the release.'
     required: false

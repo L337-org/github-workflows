@@ -84,7 +84,6 @@ jobs:
       - uses: L337-org/github-workflows/actions/release-preflight@v2
         with:
           version: ${{ steps.version.outputs.version }}
-          tag-prefix: v
       - name: Build
         run: scripts/build-deb
       - uses: L337-org/github-workflows/actions/release-attach@v2
@@ -100,9 +99,11 @@ jobs:
 ```
 
 - **The tag is the declared version, as text.**  Versions are compared as each repository writes
-  them, three parts or two, never parsed, after the `tag-prefix` the repository tags with.  New
-  repositories tag `v1.2.3` and pass `tag-prefix: v`; one that tags the bare version, as in
-  `6.2`, leaves it out.  Each repository only has to be consistent with its own history.
+  them, three parts or two, never parsed, after the `tag-prefix` the repository tags with: `v`
+  by default, as new repositories tag `v1.2.3`.  One that tags the bare version, as in `6.2`,
+  passes `tag-prefix: ''`.  Each repository only has to be consistent with its own history.
+  GitHub documents a default only for an input not given, so that one given as empty overrides
+  it is held by this repository's `input-defaults` premerge job.
 - **A major version of 0 is always a pre-release.**  Preflight fails such a release unless it is
   marked pre-release, read from the release when the step runs, so ticking the flag and
   re-running is enough.

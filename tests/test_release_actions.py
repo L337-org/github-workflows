@@ -123,11 +123,16 @@ def test_a_release_tagged_with_the_declared_version_passes(stubs):
     assert calls == []
 
 
-def test_the_prefix_defaults_to_none():
-    # So a repository with bare tags passes nothing, never an explicit empty string, whose
-    # meaning against a default GitHub does not document.
+def test_the_prefix_defaults_to_v_and_an_empty_one_is_held_by_the_probe():
+    # A repository with bare tags passes tag-prefix: '', which works only because an input given
+    # as empty overrides its default: the input-defaults premerge job holds that on GitHub.
     document = yaml.safe_load((ROOT / PREFLIGHT).read_text())
-    assert document["inputs"]["tag-prefix"]["default"] == ""
+    assert document["inputs"]["tag-prefix"]["default"] == "v"
+    probe = yaml.safe_load((ROOT / ".github" / "actions" / "input-default-probe" / "action.yml").read_text())
+    assert probe["inputs"]["value"]["default"] == "v"
+    premerge = yaml.safe_load((ROOT / ".github" / "workflows" / "premerge.yaml").read_text())
+    steps = premerge["jobs"]["input-defaults"]["steps"]
+    assert {"value": "", "expected": ""} in [s.get("with") for s in steps]
 
 
 def test_a_two_part_version_with_no_prefix_passes(stubs):
